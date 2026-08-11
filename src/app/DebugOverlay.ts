@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Polygon, Vec2 } from '../core/types.js';
 import * as V from '../geom/vec2.js';
 import type { City } from '../city/City.js';
+import { UNAVOIDABLE_VACANCY } from '../building/types.js';
 
 /**
  * Line overlays for every intermediate stage. The lot and frontage layers are
@@ -16,7 +17,9 @@ export type OverlayLayer =
   | 'frontage'
   | 'buildable'
   | 'footprints'
-  | 'flagPoles';
+  | 'flagPoles'
+  | 'vacantUnavoidable'
+  | 'vacantAvoidable';
 
 const COLORS: Record<OverlayLayer, number> = {
   roads: 0x4aa3ff,
@@ -26,6 +29,10 @@ const COLORS: Record<OverlayLayer, number> = {
   buildable: 0xb07cff,
   footprints: 0xffffff,
   flagPoles: 0xff9f43,
+  // Two colours, because the distinction is the whole point: grey is a scrap of
+  // land nothing belongs on, red is a lot the generator failed to use.
+  vacantUnavoidable: 0x9aa0a6,
+  vacantAvoidable: 0xff2d55,
 };
 
 const HEIGHTS: Record<OverlayLayer, number> = {
@@ -36,6 +43,8 @@ const HEIGHTS: Record<OverlayLayer, number> = {
   buildable: 0.55,
   footprints: 0.6,
   flagPoles: 0.5,
+  vacantUnavoidable: 0.65,
+  vacantAvoidable: 0.66,
 };
 
 export class DebugOverlay {
@@ -100,6 +109,24 @@ export class DebugOverlay {
 
     this.addLayer('buildable', ringSegments(extra.buildable ?? [], HEIGHTS.buildable));
     this.addLayer('footprints', ringSegments(extra.footprints ?? [], HEIGHTS.footprints));
+
+    // Empty lots, split by whether anything could have been done about it. A
+    // lot with no building used to be indistinguishable from ordinary ground —
+    // you could see the hole in the block but not why it was there, or even
+    // whether the generator knew.
+    const vacant = city.lots.filter((l) => l.kind === 'vacant');
+    const unavoidable = vacant.filter(
+      (l) => l.vacancyReason !== null && UNAVOIDABLE_VACANCY.includes(l.vacancyReason),
+    );
+    const avoidable = vacant.filter((l) => !unavoidable.includes(l));
+    this.addLayer(
+      'vacantUnavoidable',
+      crossedRings(unavoidable.map((l) => l.polygon), HEIGHTS.vacantUnavoidable),
+    );
+    this.addLayer(
+      'vacantAvoidable',
+      crossedRings(avoidable.map((l) => l.polygon), HEIGHTS.vacantAvoidable),
+    );
   }
 
   private addLayer(layer: OverlayLayer, positions: number[]): void {
@@ -129,6 +156,33 @@ export class DebugOverlay {
     }
     this.layers.clear();
   }
+}
+
+/**
+ * A ring with both diagonals struck across it.
+ *
+ * An empty lot is picked out by its outline alone only if you already know
+ * which outline to look at; crossing it out makes it findable from the air,
+ * which is the point of the layer.
+ */
+function crossedRings(polys: Polygon[], h: number): number[] {
+  const out = ringSegments(polys, h);
+  for (const poly of polys) {
+    if (poly.length < 3) continue;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of poly) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    out.push(minX, h, minY, maxX, h, maxY);
+    out.push(minX, h, maxY, maxX, h, minY);
+  }
+  return out;
 }
 
 function ringSegments(polys: Polygon[], h: number): number[] {

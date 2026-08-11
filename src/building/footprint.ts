@@ -28,7 +28,15 @@ import {
 } from '../geom/obb.js';
 import { projectionRoom } from './mass.js';
 import type { Lot } from '../city/Lots.js';
-import type { BuildEnvelope, BuildingSpec, Footprint, SlantPlane, Wall, WallRole } from './types.js';
+import type {
+  BuildEnvelope,
+  BuildingSpec,
+  Footprint,
+  SlantPlane,
+  VacancyReason,
+  Wall,
+  WallRole,
+} from './types.js';
 
 /**
  * Buildable envelope and footprint fitting.
@@ -132,8 +140,19 @@ export function computeEnvelope(
 
   if (buildable) buildable = cleanPolygon(buildable, { tolerance: 0.05, minEdge: 0.25, minArea: 4 });
 
+  // Say why there is nothing here, so the lot does not become an unexplained
+  // hole in the block. `buildable-too-small` is deliberately distinguished from
+  // `no-buildable-area`: the first is a scrap of land, the second means the
+  // setbacks consumed a parcel that looked perfectly ordinary.
+  const reason: VacancyReason | null = !buildable
+    ? 'no-buildable-area'
+    : area(buildable) < params.minFloorArea * 0.5
+      ? 'buildable-too-small'
+      : null;
+
   return {
     buildable,
+    reason,
     maxCoverage: spec.coverage,
     maxFAR: spec.far,
     absoluteHeightLimit: spec.heightLimit,
@@ -275,14 +294,24 @@ function composeShape(
   }
 }
 
+/** Filled in when the fit fails, so the caller can say why the lot is empty. */
+export interface FitDiagnostics {
+  reason: VacancyReason | null;
+}
+
 export function fitFootprint(
   lot: Lot,
   envelope: BuildEnvelope,
   spec: BuildingSpec,
   params: BuildingParams,
+  diag?: FitDiagnostics,
 ): Footprint | null {
   const buildable = envelope.buildable;
-  if (!buildable) return null;
+  if (!buildable) {
+    if (diag) diag.reason = envelope.reason ?? 'no-buildable-area';
+    return null;
+  }
+  if (diag) diag.reason = envelope.reason ?? 'no-footprint-fits';
   const rng = makeRng(subSeed(lot.seed, 'footprint'));
 
   // 1. Orientation. Buildings face the street; only the jitter is random.
@@ -334,11 +363,18 @@ export function fitFootprint(
   );
 
   const workFrame = best?.frame ?? frameRotated;
-  let conformTried = false;
+  // Memoised rather than single-shot. It used to refuse a second call outright,
+  // which made the final fallback at the end of this function dead code for
+  // exactly the lots that needed it most — any parcel odd enough to try
+  // conforming early and fail was then denied the last-chance attempt.
+  let conformed: Footprint | null | undefined;
   const conform = (): Footprint | null => {
-    if (conformTried || !params.conformIrregular) return null;
-    conformTried = true;
-    return conformFootprint(buildable, lot, spec, params, workFrame, rng);
+    if (!params.conformIrregular) return null;
+    if (conformed === undefined) {
+      conformed = conformFootprint(buildable, lot, spec, params, workFrame, rng);
+      if (!conformed && diag) diag.reason = 'too-narrow';
+    }
+    return conformed;
   };
 
   // No rectangle fits at all — a sliver barely wider than the raster cell.
@@ -415,9 +451,11 @@ export function fitFootprint(
     // ★ The key step: clip the composed mass to the buildable area.
     const clippedParts = intersectPoly(composed, [buildable]);
     const outline = largest(clippedParts);
+    let tooSmall = true;
     if (outline) {
       const outArea = area(outline);
       if (outArea >= params.minFloorArea) {
+        tooSmall = false;
         const cleaned = cleanFootprintWithin(outline, buildable, params);
         if (cleaned && area(cleaned) >= params.minFloorArea) {
           const clippedFraction = composedArea > 0 ? 1 - outArea / composedArea : 0;
@@ -434,6 +472,19 @@ export function fitFootprint(
         }
       }
     }
+
+    // Shrinking answers "the mass overhangs the buildable area". It cannot
+    // answer "what survived the clip is too small" — that failure only gets
+    // worse at 0.92 the size, which used to burn four of the eight attempts
+    // making the outcome less likely each time. Go straight to the shape
+    // relaxation instead: a plain rectangle claims more of an awkward parcel
+    // than an L or a U does.
+    if (tooSmall && shape !== 'rect') {
+      shape = 'rect';
+      scale = 1;
+      continue;
+    }
+    if (tooSmall) break;
 
     scale *= 0.92;
     // Relax to a plain rectangle before giving up entirely.

@@ -29,6 +29,8 @@ const OVERLAY_LAYERS: [OverlayLayer, string][] = [
   ['buildable', '建築可能領域'],
   ['footprints', 'フットプリント'],
   ['flagPoles', '旗竿地の竿'],
+  ['vacantUnavoidable', '空き地（やむを得ない）'],
+  ['vacantAvoidable', '空き地（要調査）'],
 ];
 
 export function createDebugUI(opts: DebugUIOptions): GUI {

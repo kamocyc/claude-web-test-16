@@ -6,14 +6,20 @@ import type { Lot } from '../city/Lots.js';
 import { GeometryBuffer } from '../build/GeometryBuffer.js';
 import type { MaterialFamily } from '../material/materials.js';
 import { groundGrime } from '../material/palettes.js';
-import { computeEnvelope, fitFootprint } from './footprint.js';
+import { computeEnvelope, fitFootprint, type FitDiagnostics } from './footprint.js';
 import { buildMass } from './mass.js';
 import { buildRoof } from './roof.js';
 import { buildFacades, type FacadeBuffers } from './facade.js';
 import { buildCorridorAndStairs } from './details/corridor.js';
 import { buildRooftopPlant } from './details/penthouse.js';
 import { buildLaundry } from './details/laundry.js';
-import type { BuildingSpec, Footprint, BuildingMass, BuildEnvelope } from './types.js';
+import type {
+  BuildingSpec,
+  Footprint,
+  BuildingMass,
+  BuildEnvelope,
+  VacancyReason,
+} from './types.js';
 
 /** Geometry accumulated per material family for one building. */
 export type BufferSet = Partial<Record<MaterialFamily, GeometryBuffer>>;
@@ -35,26 +41,85 @@ export function bufferFor(set: BufferSet, family: MaterialFamily): GeometryBuffe
 }
 
 /**
+ * Progressively looser terms on which a building may be attempted.
+ *
+ * The first rung is the ordinary one and almost every lot is built on it. The
+ * rest exist because the alternative to a slightly cramped house is a bald
+ * patch of ground in the middle of a block, and a real owner faced with an
+ * awkward parcel builds a smaller house on it rather than leaving it empty —
+ * which is exactly what the setback and floor-area minimums are standing in the
+ * way of. Nothing here lets a building leave its lot: the buildable area is
+ * still the lot inset by whatever setback the rung allows.
+ */
+const CONCESSIONS: { setback: number; floorArea: number; carPad: boolean }[] = [
+  { setback: 1, floorArea: 1, carPad: true },
+  { setback: 0.6, floorArea: 1, carPad: true },
+  { setback: 0.35, floorArea: 0.8, carPad: false },
+  { setback: 0.15, floorArea: 0.55, carPad: false },
+];
+
+export type BuildAttempt =
+  | { ok: true; building: BuiltBuilding }
+  | { ok: false; reason: VacancyReason };
+
+/**
  * envelope -> footprint -> mass -> roof -> façade -> details, written into
  * per-material geometry buffers ready for chunk merging.
+ *
+ * Returns why it failed rather than a bare null: an empty lot with no
+ * explanation is indistinguishable from a bug, and used to be one.
  */
 export function buildBuilding(
   lot: Lot,
   spec: BuildingSpec,
   params: BuildingParams,
-): BuiltBuilding | null {
-  const envelope = computeEnvelope(lot, spec, params);
-  if (!envelope.buildable) return null;
+): BuildAttempt {
+  let envelope: BuildEnvelope | null = null;
+  let footprint: Footprint | null = null;
+  // Whichever rung succeeded. Everything downstream — the mass, the eaves, the
+  // façade module — has to be built on the same terms the footprint was fitted
+  // on; mixing two parameter sets inside one building produces a mass that does
+  // not partition its own plan.
+  let built: BuildingParams = params;
+  const diag: FitDiagnostics = { reason: null };
 
-  const footprint = fitFootprint(lot, envelope, spec, params);
-  if (!footprint) return null;
+  for (const c of CONCESSIONS) {
+    const relaxed: BuildingParams =
+      c.setback === 1 && c.floorArea === 1
+        ? params
+        : {
+            ...params,
+            frontSetback: params.frontSetback * c.setback,
+            sideSetback: params.sideSetback * c.setback,
+            rearSetback: params.rearSetback * c.setback,
+            minFloorArea: params.minFloorArea * c.floorArea,
+          };
+    const trySpec = c.carPad ? spec : { ...spec, wantsCarPad: false };
+
+    const env = computeEnvelope(lot, trySpec, relaxed);
+    if (!env.buildable) {
+      diag.reason = env.reason ?? 'no-buildable-area';
+      continue;
+    }
+    const fp = fitFootprint(lot, env, trySpec, relaxed, diag);
+    if (fp) {
+      envelope = env;
+      footprint = fp;
+      built = relaxed;
+      break;
+    }
+  }
+
+  // `too-narrow` is the one refusal worth keeping: a parcel that holds nothing
+  // wider than a corridor is better left as ground than built on.
+  if (!envelope || !footprint) return { ok: false, reason: diag.reason ?? 'no-footprint-fits' };
 
   // Mirroring doubles apparent variety at zero cost. Applied by flipping the
   // façade seed rather than the geometry, which keeps the building facing the
   // street while genuinely rearranging its openings.
   const facadeSeed = spec.mirrored ? subSeed(lot.seed, 'mirror') : lot.seed;
 
-  const mass = buildMass(footprint, envelope, spec, lot, params);
+  const mass = buildMass(footprint, envelope, spec, lot, built);
   const buffers: BufferSet = {};
 
   const wallBuf = bufferFor(buffers, spec.wallFamily);
@@ -70,7 +135,7 @@ export function buildBuilding(
     accent: metalBuf,
   };
 
-  buildFacades(facadeBufs, mass.floors, spec, params, facadeSeed);
+  buildFacades(facadeBufs, mass.floors, spec, built, facadeSeed);
 
   // One roof per stack. The tallest keeps the archetype's roof; a part stepped
   // down by 斜線制限 gets a flat roof and becomes a roof terrace.
@@ -141,7 +206,7 @@ export function buildBuilding(
   let triangles = 0;
   for (const b of Object.values(buffers)) if (b) triangles += b.triangleCount;
 
-  return { lot, spec, envelope, footprint, mass, buffers, triangles };
+  return { ok: true, building: { lot, spec, envelope, footprint, mass, buffers, triangles } };
 }
 
 /**

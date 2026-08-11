@@ -4,6 +4,7 @@ import {
   area,
   centroid,
   clipSegmentToPolygon,
+  contains,
   edges as polyEdges,
   isSimple,
 } from '../geom/polygon.js';
@@ -34,11 +35,34 @@ export interface BlockEdge {
   roadWidth: number;
 }
 
+/**
+ * A road running through the *inside* of a block rather than along its edge.
+ *
+ * Dead-end streets are pruned before the face walk — a degree-1 chain would be
+ * walked out and back and inject a zero-area spike into the face — so a block
+ * containing one has no boundary edge for it, and used to have no knowledge of
+ * it whatsoever. It was still drawn by the renderer, so the subdivider laid
+ * lots straight over the asphalt and put houses on them.
+ *
+ * Carrying them here means the same block that gets the road's right of way
+ * taken off it also gets to sell frontage on it, which is what a 行き止まり
+ * street is for.
+ */
+export interface InteriorRoad {
+  a: Vec2;
+  b: Vec2;
+  cls: RoadClass;
+  width: number;
+  roadEdgeId: number;
+}
+
 export interface Block {
   id: number;
   seed: string;
   polygon: Polygon;
   edges: BlockEdge[];
+  /** Dead-end streets lying inside this block. */
+  interiorRoads: InteriorRoad[];
   area: number;
   centroid: Vec2;
 }
@@ -113,6 +137,7 @@ export function extractBlocks(
           // frontage, and the lot subdivider then set the edge back 3 m for a
           // road that was not there.
           edges: attributeEdges(piece, net, split.lanes, opts.attributionTolerance),
+          interiorRoads: interiorRoadsOf(piece, net, spurs.edgeIds),
           area: a,
           centroid: centroid(piece),
         });
@@ -283,6 +308,26 @@ function attributeEdges(
       cls: bestCls,
       roadWidth: bestWidth,
     });
+  }
+  return out;
+}
+
+/**
+ * The pruned dead-end streets that fall inside this block.
+ *
+ * Tested at the midpoint: a spur either runs into the block from its boundary
+ * or lies wholly within it, and in both cases the midpoint is inside. Endpoints
+ * are not usable — a spur's first node sits exactly on the block boundary,
+ * where `contains` is a coin toss.
+ */
+function interiorRoadsOf(poly: Polygon, net: RoadNetwork, spurIds: Set<number>): InteriorRoad[] {
+  const out: InteriorRoad[] = [];
+  for (const e of net.edges) {
+    if (!spurIds.has(e.id)) continue;
+    const a = net.graph.node(e.a).p;
+    const b = net.graph.node(e.b).p;
+    if (!contains(poly, V.lerp(a, b, 0.5))) continue;
+    out.push({ a, b, cls: e.cls, width: e.width, roadEdgeId: e.id });
   }
   return out;
 }

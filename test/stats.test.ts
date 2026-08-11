@@ -2,6 +2,8 @@ import { describe, it } from 'vitest';
 import { DEFAULT_PARAMS, applyRoadLayout, cloneParams, type RoadLayout } from '../src/core/params.js';
 import { generateCity } from '../src/city/City.js';
 import { clearanceViolations } from '../src/city/RoadClearance.js';
+import { planBuildings } from '../src/build/CityMesh.js';
+import { UNAVOIDABLE_VACANCY } from '../src/building/types.js';
 
 /**
  * Not an assertion suite — a printout of what the generator actually produces,
@@ -16,8 +18,16 @@ describe('city statistics', () => {
     const city = generateCity(params);
     const total = performance.now() - t0;
 
+    // Run the building pass too. `kinds` used to be counted straight off the
+    // zoning, so it summed to every lot and could not show a vacancy however
+    // many there were — whether a lot got built on was decided later, inside the
+    // mesh builder, and thrown away.
+    const plan = planBuildings(city, params);
     const counts: Record<string, number> = {};
     for (const l of city.lots) counts[l.kind] = (counts[l.kind] ?? 0) + 1;
+    const unavoidable = city.lots.filter(
+      (l) => l.vacancyReason !== null && UNAVOIDABLE_VACANCY.includes(l.vacancyReason),
+    ).length;
     const flag = city.lots.filter((l) => l.isFlagLot).length;
     const lotsPerBlock = new Map<number, number>();
     for (const l of city.lots) lotsPerBlock.set(l.blockId, (lotsPerBlock.get(l.blockId) ?? 0) + 1);
@@ -58,6 +68,9 @@ describe('city statistics', () => {
         `kinds:      ${JSON.stringify(counts)}`,
         `lot area:   p10=${q(0.1)} p50=${q(0.5)} p90=${q(0.9)} max=${areas[areas.length - 1]?.toFixed(0)}`,
         `clusters:   ${new Set(city.lots.map((l) => l.clusterId)).size}`,
+        `empty lots: ${plan.vacant}/${city.lots.length}` +
+          ` (${((plan.vacant / city.lots.length) * 100).toFixed(1)}%),` +
+          ` ${unavoidable} unavoidable — ${JSON.stringify(plan.vacancyReasons)}`,
         `empty blks: ${empty.length}/${city.blocks.length} covering ${emptyArea.toFixed(0)} m²` +
           ` (largest ${Math.max(0, ...empty.map((b) => b.area)).toFixed(0)} m²)`,
         `no frontage:${noFrontage} blocks`,
@@ -67,6 +80,6 @@ describe('city statistics', () => {
         '',
       ].join('\n'),
     );
-  });
+  }, 60000);
   }
 });

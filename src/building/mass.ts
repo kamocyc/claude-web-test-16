@@ -259,7 +259,17 @@ export function buildMass(
       const bandArea = rings.reduce((t, r) => t + area(r), 0);
       const removed = area(before) - area(next);
 
-      if (rings.length > 0 && bandArea >= removed * 0.9) {
+      // Both directions, not just the lower one. `differencePoly` fails *open*:
+      // when polygon-clipping throws at every quantum it returns the subject
+      // unchanged rather than nothing, so a failed subtraction hands back the
+      // whole storey as the "band". Checking only that the band was not too
+      // small waved that through, and the building came out with a full-plan
+      // terrace underneath a full-height block standing on top of it — 37% more
+      // stack area than there was plan to put it on. The band is `removed` by
+      // construction, so anything else means the boolean lied.
+      const honest = bandArea >= removed * 0.9 && bandArea <= removed * 1.1 + 1e-6;
+
+      if (rings.length > 0 && honest) {
         for (const ring of rings) stacks.push(makeStack(ring, f, true, footprint, spec, params));
         cur = next;
       }
