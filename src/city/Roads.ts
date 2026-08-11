@@ -173,12 +173,21 @@ function plannedStreets(p: RoadParams, rng: Rng, pushLine: PushLine): Vec2 {
   const xCls = classifyLines(rng, xs.length, perAxis, p);
   const yCls = classifyLines(rng, ys.length, perAxis, p);
 
-  // Full-width streets on both axes; `makePlanar` splits them at the crossings.
+  // Emit each street crossing by crossing rather than as one full-width
+  // segment. `makePlanar` deliberately ignores intersections that land on an
+  // endpoint, so a street *ending* on the boundary street — every interior
+  // street does, at both ends — would not split it and the two would never
+  // connect. Cutting at the crossings up front makes every junction an
+  // explicit shared node, which is cheaper as well as correct.
   for (let i = 0; i < xs.length; i++) {
-    pushLine([{ x: xs[i]!, y: -E }, { x: xs[i]!, y: E }], xCls[i]!);
+    for (let j = 0; j + 1 < ys.length; j++) {
+      pushLine([{ x: xs[i]!, y: ys[j]! }, { x: xs[i]!, y: ys[j + 1]! }], xCls[i]!);
+    }
   }
   for (let j = 0; j < ys.length; j++) {
-    pushLine([{ x: -E, y: ys[j]! }, { x: E, y: ys[j]! }], yCls[j]!);
+    for (let i = 0; i + 1 < xs.length; i++) {
+      pushLine([{ x: xs[i]!, y: ys[j]! }, { x: xs[i + 1]!, y: ys[j]! }], yCls[j]!);
+    }
   }
 
   // The station sits on the east–west arterial, off-centre along it.
