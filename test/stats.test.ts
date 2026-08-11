@@ -1,13 +1,14 @@
 import { describe, it } from 'vitest';
 import { DEFAULT_PARAMS, applyRoadLayout, cloneParams, type RoadLayout } from '../src/core/params.js';
 import { generateCity } from '../src/city/City.js';
+import { clearanceViolations } from '../src/city/RoadClearance.js';
 
 /**
  * Not an assertion suite — a printout of what the generator actually produces,
  * so the shape of the city can be checked at a glance while tuning.
  */
 describe('city statistics', () => {
-  for (const layout of ['warped', 'grid'] as RoadLayout[]) {
+  for (const layout of ['district', 'grid'] as RoadLayout[]) {
   it(`reports counts and timings (${layout} layout)`, () => {
     const params = cloneParams(DEFAULT_PARAMS);
     applyRoadLayout(params.roads, layout);
@@ -26,11 +27,32 @@ describe('city statistics', () => {
     const areas = city.lots.map((l) => l.area).sort((a, b) => a - b);
     const q = (f: number) => areas[Math.floor(areas.length * f)]?.toFixed(0) ?? '-';
 
+    // The district axes are the single number to watch while tuning: the town
+    // is meant to read as a patchwork, and if every district lands within a
+    // couple of degrees of the same angle it is one grid wearing a disguise.
+    const axes = city.roads.districts.map((d) => ((d.axis * 180) / Math.PI + 360) % 90);
+    // Grid axes live mod 90°, so 1° and 89° are two degrees apart, not 88.
+    // Reporting the naive range makes an almost-uniform town look varied.
+    let spread = 0;
+    for (const a of axes) {
+      for (const b of axes) {
+        const d = Math.abs(a - b) % 90;
+        spread = Math.max(spread, Math.min(d, 90 - d));
+      }
+    }
+    const tier1 = city.roads.edges.filter((e) => e.cls !== 'local').length;
+    const violations = clearanceViolations(city.roads, {
+      clearance: params.roads.roadClearance,
+      includeLanes: true,
+    });
+
     console.log(
       [
         '',
         `layout:     ${layout}`,
-        `roads:      ${city.roads.edges.length} edges, ${city.roads.privateLanes.length} private lanes`,
+        `roads:      ${city.roads.edges.length} edges (${tier1} tier-1), ${city.roads.privateLanes.length} private lanes`,
+        `districts:  ${city.roads.districts.length}, axes ${axes.map((a) => a.toFixed(0)).join('/')} (spread ${spread.toFixed(0)}°)`,
+        `clearance:  ${violations.length} violations`,
         `blocks:     ${city.blocks.length} (rejected ${city.rejectedBlocks.length})`,
         `lots:       ${city.lots.length}  flag lots: ${flag}`,
         `kinds:      ${JSON.stringify(counts)}`,

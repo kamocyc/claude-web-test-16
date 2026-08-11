@@ -13,6 +13,7 @@ import { extractFaces, findSpurs } from '../geom/planarGraph.js';
 import { minAreaObb } from '../geom/obb.js';
 import { clipHalfPlane, splitPolygonByLine } from '../geom/halfplane.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
+import { trimLaneEnds } from './RoadClearance.js';
 
 /**
  * Block extraction: bounded faces of the road graph become city blocks, and each
@@ -55,12 +56,15 @@ export interface BlockOptions {
   maxArea: number;
   /** How close a block edge must be to a road edge to be attributed to it. */
   attributionTolerance: number;
+  /** Gap a lane cut through an oversized block must keep from the roads around it. */
+  laneClearance: number;
 }
 
 export const DEFAULT_BLOCK_OPTIONS: BlockOptions = {
   minArea: 200,
   maxArea: 5200,
   attributionTolerance: 0.6,
+  laneClearance: 2,
 };
 
 export function extractBlocks(
@@ -92,7 +96,7 @@ export function extractBlocks(
       // An oversized block would otherwise be dropped, leaving a conspicuous
       // hole in the town. Run a street through it instead — which is what
       // actually happens when a large parcel is developed.
-      const split = splitOversized(cleaned, net, opts);
+      const split = splitOversized(cleaned, net, opts, opts.laneClearance);
       for (const piece of split.pieces) {
         const a = area(piece);
         if (a < opts.minArea) {
@@ -128,6 +132,7 @@ function splitOversized(
   poly: Polygon,
   net: RoadNetwork,
   opts: BlockOptions,
+  clearance: number,
 ): { pieces: Polygon[]; lanes: RoadNetwork['privateLanes'] } {
   const out: Polygon[] = [];
   const lanes: RoadNetwork['privateLanes'] = [];
@@ -157,11 +162,17 @@ function splitOversized(
     // the block's long side and drove tens of metres of asphalt straight through
     // the neighbouring blocks.
     const spanAlongCut = Math.min(obb.rect.w, obb.rect.d);
-    const lane = clipSegmentToPolygon(
+    const cut = clipSegmentToPolygon(
       p,
       V.addScaled(c, cutDir, -spanAlongCut),
       V.addScaled(c, cutDir, spanAlongCut),
     );
+    // The block face is bounded by road *centrelines*, so a lane clipped to it
+    // ends half a carriageway inside the asphalt of the road it meets — up to
+    // 6.5 m of it against an arterial. Pull both ends back off the roads they
+    // run into; if nothing usable is left, split the block anyway and let the
+    // halves do without the extra frontage.
+    const lane = cut ? trimLaneEnds(net, cut[0], cut[1], 5, clearance) : null;
     if (lane) {
       const record = { a: lane[0], b: lane[1], width: 5 };
       net.privateLanes.push(record);
@@ -211,6 +222,7 @@ function attributeEdges(
     let bestId: number | null = null;
     let bestCls: RoadClass | null = null;
     let bestWidth = 0;
+    let bestDir: Vec2 | null = null;
     let bestScore = Infinity;
 
     for (const re of net.edges) {
@@ -228,6 +240,7 @@ function attributeEdges(
         bestId = re.id;
         bestCls = re.cls;
         bestWidth = re.width;
+        bestDir = rdir;
       }
     }
 
@@ -245,13 +258,27 @@ function attributeEdges(
       }
     }
 
+    // Where the edge came from a road, take its frame from the road rather than
+    // from the polygon. Face extraction and cleanup shift a block edge by a
+    // fraction of a degree, differently for each one, and that fraction
+    // propagates all the way to which way the house points — so every lot on a
+    // street ends up facing a slightly different way. Reading the direction off
+    // the road makes a row of them exactly parallel.
+    let dir = e.dir;
+    let normal = e.normal;
+    if (bestId !== null && bestDir) {
+      dir = V.dot(bestDir, e.dir) < 0 ? V.neg(bestDir) : bestDir;
+      const n = V.perp(dir);
+      normal = V.dot(n, e.normal) < 0 ? V.neg(n) : n;
+    }
+
     out.push({
       a: e.a,
       b: e.b,
       i: e.i,
       len: e.len,
-      dir: e.dir,
-      normal: e.normal,
+      dir,
+      normal,
       roadEdgeId: bestId,
       cls: bestCls,
       roadWidth: bestWidth,

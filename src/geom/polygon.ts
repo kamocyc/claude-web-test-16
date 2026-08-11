@@ -317,9 +317,30 @@ export function clipSegmentToPolygon(
   a: Vec2,
   b: Vec2,
 ): [Vec2, Vec2] | null {
+  let best: [Vec2, Vec2] | null = null;
+  let bestLen = 0;
+  for (const run of clipSegmentToPolygonAll(poly, a, b)) {
+    const l = V.dist(run[0], run[1]);
+    if (!best || l > bestLen) {
+      best = run;
+      bestLen = l;
+    }
+  }
+  return best;
+}
+
+/**
+ * Every run of a–b that lies inside `poly`, in order along the segment.
+ *
+ * A concave polygon — an L-shaped district, a block with a notch — can contain
+ * two or more disjoint stretches of the same line. `clipSegmentToPolygon`
+ * returns only the longest, which silently drops half a street; callers laying
+ * out a grid want all of them.
+ */
+export function clipSegmentToPolygonAll(poly: Polygon, a: Vec2, b: Vec2): [Vec2, Vec2][] {
   const d = V.sub(b, a);
   const total = V.len(d);
-  if (total < 1e-6) return null;
+  if (total < 1e-6) return [];
 
   // Every crossing parameter along the segment, plus the two endpoints.
   const ts: number[] = [0, 1];
@@ -329,15 +350,14 @@ export function clipSegmentToPolygon(
   }
   ts.sort((p, q) => p - q);
 
-  let best: [number, number] | null = null;
+  const runs: [Vec2, Vec2][] = [];
   for (let i = 0; i + 1 < ts.length; i++) {
     const t0 = ts[i]!;
     const t1 = ts[i + 1]!;
     if (t1 - t0 < 1e-6) continue;
+    if ((t1 - t0) * total < 1e-3) continue;
     if (!contains(poly, V.addScaled(a, d, (t0 + t1) / 2))) continue;
-    if (!best || t1 - t0 > best[1] - best[0]) best = [t0, t1];
+    runs.push([V.addScaled(a, d, t0), V.addScaled(a, d, t1)]);
   }
-  if (!best) return null;
-  if ((best[1] - best[0]) * total < 1e-3) return null;
-  return [V.addScaled(a, d, best[0]), V.addScaled(a, d, best[1])];
+  return runs;
 }

@@ -140,6 +140,70 @@ export function makePlanar(graph: PlanarGraph, snapDistance = 0.4): PlanarGraph 
   return out;
 }
 
+/**
+ * Split every edge that a node lands on the *interior* of.
+ *
+ * `makePlanar` only records intersections strictly inside both edges, so a
+ * street that ends exactly on another one — every T-junction, and every road
+ * that stops on the town perimeter — leaves the road it meets unsplit. The two
+ * then share no node: the face walk treats them as unconnected, `findSpurs`
+ * prunes the dead-ending street out of the walk entirely, and the districts
+ * either side of it merge into one.
+ *
+ * Callers can avoid this by overshooting the junction, but that only works when
+ * they know a junction is there. This pass makes it unconditional.
+ */
+export function splitEdgesAtNodes(graph: PlanarGraph, tolerance = 0.05): PlanarGraph {
+  const splits: Map<number, { t: number; p: Vec2 }[]> = new Map();
+
+  for (const e of graph.edges) {
+    const a = graph.node(e.a).p;
+    const b = graph.node(e.b).p;
+    const ab = V.sub(b, a);
+    const l2 = V.lenSq(ab);
+    if (l2 < 1e-12) continue;
+
+    for (const n of graph.nodes) {
+      if (n.id === e.a || n.id === e.b) continue;
+      const t = V.dot(V.sub(n.p, a), ab) / l2;
+      // Only interior hits: an endpoint hit means they already share a node, or
+      // are within snapping distance of doing so.
+      if (t <= 1e-6 || t >= 1 - 1e-6) continue;
+      const foot = V.addScaled(a, ab, t);
+      if (V.dist(foot, n.p) > tolerance) continue;
+      // Do not manufacture a fragment shorter than the tolerance itself.
+      const len = Math.sqrt(l2);
+      if (t * len < tolerance || (1 - t) * len < tolerance) continue;
+      let list = splits.get(e.id);
+      if (!list) splits.set(e.id, (list = []));
+      list.push({ t, p: n.p });
+    }
+  }
+
+  if (splits.size === 0) return graph;
+
+  const out = new PlanarGraph(tolerance);
+  for (const e of graph.edges) {
+    const a = graph.node(e.a).p;
+    const b = graph.node(e.b).p;
+    const list = splits.get(e.id);
+    if (!list) {
+      out.addSegment(a, b, e.data);
+      continue;
+    }
+    list.sort((x, y) => x.t - y.t);
+    let prev = a;
+    for (const s of list) {
+      if (V.dist(prev, s.p) > tolerance) {
+        out.addSegment(prev, s.p, e.data);
+        prev = s.p;
+      }
+    }
+    if (V.dist(prev, b) > tolerance) out.addSegment(prev, b, e.data);
+  }
+  return out;
+}
+
 /** Edges removed by spur pruning, in original-graph terms. */
 export interface PrunedSpurs {
   edgeIds: Set<number>;

@@ -16,6 +16,7 @@ import { differencePoly, intersectPoly, largest, multiArea, unionPoly } from '..
 import { cleanPolygon } from '../geom/simplify.js';
 import type { Block } from './Blocks.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
+import { laneClears } from './RoadClearance.js';
 
 /**
  * Lot subdivision — the crux of the whole generator. Everything downstream
@@ -46,6 +47,12 @@ export interface LotFrontage {
   outward: Vec2;
   cls: RoadClass;
   roadWidth: number;
+  /**
+   * The road edge this frontage belongs to, or null for a private lane. Two
+   * lots sharing this id are on the same stretch of the same street, which is
+   * the only way anything downstream can tell that they should line up.
+   */
+  roadEdgeId: number | null;
   /** Midpoint of the frontage edge. */
   mid: Vec2;
 }
@@ -92,6 +99,7 @@ interface FrontRef {
   inward: Vec2;
   cls: RoadClass;
   roadWidth: number;
+  roadEdgeId: number | null;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -138,6 +146,7 @@ export function subdivideBlock(
       inward: e.normal,
       cls: e.cls,
       roadWidth: e.roadWidth,
+      roadEdgeId: e.roadEdgeId,
     });
   }
 
@@ -220,7 +229,16 @@ function subdivideInterior(
   let laneBuilt = false;
 
   if (core && canRecurse && coreArea >= cfg.minCoreArea) {
-    const lane = tryPrivateLane(core, inner, ordered, cfg, rng);
+    const candidate = tryPrivateLane(core, inner, ordered, cfg, rng);
+    // `inner` only has the *bounding* roads subtracted from it. A dead-end
+    // street is pruned from the face walk, so it lies inside the block with
+    // nothing to mark it, and a corridor driven toward the core can run
+    // straight along it. Nothing here can move the road, so drop the lane and
+    // let the core become 旗竿地 instead.
+    const lane =
+      candidate && laneClears(net, candidate.from, candidate.to, cfg.privateLaneWidth, 2)
+        ? candidate
+        : null;
     if (lane) {
       laneBuilt = true;
       net.privateLanes.push({ a: lane.from, b: lane.to, width: cfg.privateLaneWidth });
@@ -414,6 +432,10 @@ function laneFrontRefs(lane: PrivateLane, cfg: LotParams): FrontRef[] {
       inward: V.scale(side, sign),
       cls: 'private',
       roadWidth: cfg.privateLaneWidth,
+      // A lane is not in the road graph, so it has no edge to point at. Both of
+      // its sides still share this one reference, which is what keeps the two
+      // facing rows of houses parallel to each other.
+      roadEdgeId: null,
     };
   };
   return [mk(1), mk(-1)];
@@ -650,16 +672,29 @@ function computeFrontages(poly: Polygon, fronts: FrontRef[], cfg: LotParams): Lo
       if (!best || d < best.d) best = { f, d };
     }
     if (!best) continue;
+    // Take the direction from the *street*, not from this lot's own edge.
+    //
+    // The two differ by a fraction of a degree — the lot boundary has been
+    // through cleaning, simplification and a boolean or two since it was cut
+    // off the block — but that fraction is what decides which way the house
+    // points, and it differs for every lot on the street. Reading it off the
+    // shared reference instead makes every house on one street segment face
+    // exactly the same way, which is what a row of them looks like in life.
+    const streetward = V.neg(best.f.inward);
+    // The reference is shared by both sides of a lane, so orient it by this
+    // lot's own outward normal rather than trusting its stored sign.
+    const outward = V.dot(V.neg(e.normal), streetward) < 0 ? V.neg(streetward) : streetward;
+    const dir = V.dot(e.dir, V.perp(outward)) < 0 ? V.neg(V.perp(outward)) : V.perp(outward);
     out.push({
       i: e.i,
       a: e.a,
       b: e.b,
       len: e.len,
-      dir: e.dir,
-      // Polygon edge normals point inward, so the street is the other way.
-      outward: V.neg(e.normal),
+      dir,
+      outward,
       cls: best.f.cls,
       roadWidth: best.f.roadWidth,
+      roadEdgeId: best.f.roadEdgeId,
       mid,
     });
   }

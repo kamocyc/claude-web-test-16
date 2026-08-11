@@ -1,5 +1,10 @@
 import type { CityParams } from '../core/params.js';
-import { extractBlocks, type Block, type BlockExtraction } from './Blocks.js';
+import {
+  DEFAULT_BLOCK_OPTIONS,
+  extractBlocks,
+  type Block,
+  type BlockExtraction,
+} from './Blocks.js';
 import { generateRoads, type RoadNetwork } from './Roads.js';
 import { subdivideBlock, type Lot } from './Lots.js';
 import { assignZoning, makeUrbanityField, type UrbanityField } from './Zoning.js';
@@ -26,7 +31,12 @@ export function generateCity(params: CityParams): City {
   };
 
   const roads = clock('roads', () => generateRoads(params.seed, params.roads));
-  const extraction = clock('blocks', () => extractBlocks(roads, params.seed));
+  const extraction = clock('blocks', () =>
+    extractBlocks(roads, params.seed, {
+      ...DEFAULT_BLOCK_OPTIONS,
+      laneClearance: params.roads.roadClearance,
+    }),
+  );
   const urbanity = clock('urbanity', () => makeUrbanityField(roads, params));
 
   const lots = clock('lots', () => {

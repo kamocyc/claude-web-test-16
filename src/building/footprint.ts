@@ -313,8 +313,16 @@ export function fitFootprint(
   const candidateFrames: Frame[] = [frameRotated];
   const lotObb = minAreaObb(buildable);
   for (const axis of [lotObb.frame.xAxis, V.perp(lotObb.frame.xAxis)]) {
-    // Only consider a lot-aligned frame if it still roughly faces the street.
-    if (Math.abs(V.dot(axis, frameRotated.xAxis)) > 0.55) {
+    // Only consider a lot-aligned frame if it still faces the street.
+    //
+    // This threshold is the single largest influence on whether a street reads
+    // as a street. `workFrame` below — not `spec.facingAngle` — is what actually
+    // orients the composed footprint, so admitting a frame here admits a house
+    // rotated that far off the frontage. The old value of 0.55 allowed 56.6°,
+    // which meant a lot whose side boundaries had been skewed by
+    // `cutAngleJitter` could turn its house most of the way to sideways-on,
+    // even on a perfectly square grid.
+    if (Math.abs(V.dot(axis, frameRotated.xAxis)) > params.frameAlignMin) {
       candidateFrames.push({ origin: frame.origin, xAxis: axis });
     }
   }
