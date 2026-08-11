@@ -49,18 +49,23 @@ export const WALL_RC_TILE: readonly (readonly [number, number])[] = [
 ] as const;
 
 export const ROOF_METAL: readonly (readonly [number, number])[] = [
-  [0x5c626a, 4], // 銀黒
-  [0x5c7a72, 2.5], // 青緑
+  [0x8a4f3c, 5], // 赤錆茶 — the classic painted-steel red-brown
+  [0x7d4a38, 4], // deeper red-brown
+  [0x3f4a70, 3.5], // 紺 navy
+  [0x4a5580, 2], // lighter navy
   [0x7a6047, 2], // brown
+  [0x5c626a, 3.5], // 銀黒
+  [0x5c7a72, 1.5], // 青緑
   [0x474d52, 2], // black
-  [0x6a7280, 2],
 ] as const;
 
 export const ROOF_KAWARA: readonly (readonly [number, number])[] = [
-  [0x4a6a8c, 3], // cobalt
-  [0x62786e, 3], // いぶし green
-  [0xb06a44, 1.5], // orange
-  [0x565c63, 3], // いぶし銀
+  [0x9c4f33, 3.5], // 赤茶 — red-brown pantile
+  [0xb06a44, 2.5], // orange
+  [0x3a4a70, 3.5], // 紺 navy
+  [0x4a6a8c, 2.5], // cobalt
+  [0x62786e, 1.5], // いぶし green
+  [0x565c63, 2.5], // いぶし銀
 ] as const;
 
 /** Entrance doors and apartment unit doors. */
@@ -133,7 +138,19 @@ export function sampleColor(
 }
 
 /**
- * Pick a roof colour that obeys rules 1 and 2 against an already-chosen wall.
+ * Cap on roof saturation. This used to be *relative* to the wall
+ * (`cand.s < wall.s + 0.1`), which was simply wrong: walls here are pale
+ * beiges and greys at a saturation around 0.1, while a real cobalt or red-brown
+ * roof sits near 0.5. Every coloured roof therefore failed the test, fell
+ * through to the fallback, and had its saturation crushed to grey — which is
+ * why the town came out roofed entirely in charcoal.
+ *
+ * Roofs being *darker* than the wall is the rule that actually holds.
+ */
+const ROOF_MAX_SATURATION = 0.52;
+
+/**
+ * Pick a roof colour darker than the wall, without desaturating it.
  * Falls back to darkening the best candidate rather than looping forever.
  */
 export function sampleRoofColor(
@@ -144,13 +161,15 @@ export function sampleRoofColor(
   let best: Hsv | null = null;
   for (let i = 0; i < 8; i++) {
     const cand = sampleColor(palette, rng, { h: 0.015, s: 0.05, v: 0.04 }).hsv;
-    if (cand.v < wall.v - 0.18 && cand.s < wall.s + 0.1) return { color: fromHsv(cand), hsv: cand };
+    if (cand.v < wall.v - 0.15 && cand.s <= ROOF_MAX_SATURATION) {
+      return { color: fromHsv(cand), hsv: cand };
+    }
     if (!best || cand.v < best.v) best = cand;
   }
   const forced: Hsv = {
     h: best!.h,
-    s: Math.min(best!.s, wall.s + 0.09),
-    v: Math.min(best!.v, Math.max(0.05, wall.v - 0.2)),
+    s: Math.min(best!.s, ROOF_MAX_SATURATION),
+    v: Math.min(best!.v, Math.max(0.05, wall.v - 0.18)),
   };
   return { color: fromHsv(forced), hsv: forced };
 }

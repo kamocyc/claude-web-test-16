@@ -1,5 +1,5 @@
 import GUI from 'lil-gui';
-import type { CityParams } from '../core/params.js';
+import { applyRoadLayout, type CityParams, type RoadLayout } from '../core/params.js';
 import type { DebugOverlay, OverlayLayer } from './DebugOverlay.js';
 import type { Environment } from './Environment.js';
 import type { MaterialLibrary } from '../material/materials.js';
@@ -66,6 +66,17 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
 
   // --- Roads ---------------------------------------------------------------
   const fRoads = gui.addFolder('道路').close();
+  fRoads
+    .add(params.roads, 'layout', { '有機的（歪んだ格子）': 'warped', '単純な格子＋斜め': 'grid' })
+    .name('街路のレイアウト')
+    .onChange((v: RoadLayout) => {
+      // A layout change moves several parameters at once, so refresh the
+      // sliders before regenerating or they show stale values.
+      applyRoadLayout(params.roads, v);
+      gui.controllersRecursive().forEach((c) => c.updateDisplay());
+      regenerate();
+    });
+  fRoads.add(params.roads, 'diagonalCount', 0, 4, 1).name('斜め道路の本数');
   fRoads.add(params.roads, 'extent', 120, 600, 10).name('街の広さ');
   fRoads.add(params.roads, 'localSpacing', 25, 90, 1).name('区画街路の間隔');
   fRoads.add(params.roads, 'warpAmplitude1', 0, 40, 1).name('歪み(大)');

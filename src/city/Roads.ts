@@ -87,6 +87,14 @@ function catmullRom(points: Vec2[], step: number): Vec2[] {
   return out;
 }
 
+/** Resample a two-point line so `clipToSquare` has points to work with. */
+function resampleLine(line: Vec2[], step: number): Vec2[] {
+  const a = line[0]!;
+  const b = line[line.length - 1]!;
+  const n = Math.max(2, Math.ceil(V.dist(a, b) / step));
+  return Array.from({ length: n + 1 }, (_, i) => V.lerp(a, b, i / n));
+}
+
 /** Split a polyline into the runs that lie inside the square [-e, e]^2. */
 function clipToSquare(line: Vec2[], e: number): Vec2[][] {
   const inside = (p: Vec2) => Math.abs(p.x) <= e && Math.abs(p.y) <= e;
@@ -106,6 +114,10 @@ function clipToSquare(line: Vec2[], e: number): Vec2[][] {
 export function generateRoads(seed: string, p: RoadParams): RoadNetwork {
   const rng = makeRng(subSeed(seed, 'roads'));
   const E = p.extent;
+  // The planned-development layout: straight arterials, an unwarped grid, no
+  // jogging, and a couple of diagonal through-roads instead of the organic
+  // wobble. Everything else in this function is shared.
+  const planned = p.layout === 'grid';
 
   // Two octaves of warp, with independent fields per axis so the grid shears
   // rather than merely translating.
@@ -142,7 +154,7 @@ export function generateRoads(seed: string, p: RoadParams): RoadNetwork {
     const steps = 5;
     for (let s = 0; s <= steps; s++) {
       const t = -E * 1.15 + (s / steps) * E * 2.3;
-      const wobble = offset + rng.gauss(0, E * 0.07);
+      const wobble = offset + (planned ? 0 : rng.gauss(0, E * 0.07));
       ctrl.push(horizontal ? { x: t, y: wobble } : { x: wobble, y: t });
     }
     const line = catmullRom(ctrl, 8);
@@ -165,9 +177,23 @@ export function generateRoads(seed: string, p: RoadParams): RoadNetwork {
     const ctrl: Vec2[] = [];
     for (let s = 0; s <= 4; s++) {
       const t = -E * 1.1 + (s / 4) * E * 2.2;
-      ctrl.push(horizontal ? { x: t, y: base + rng.gauss(0, 9) } : { x: base + rng.gauss(0, 9), y: t });
+      const jitter = planned ? 0 : rng.gauss(0, 9);
+      ctrl.push(horizontal ? { x: t, y: base + jitter } : { x: base + jitter, y: t });
     }
     for (const run of clipToSquare(catmullRom(ctrl, 10), E)) pushLine(run, 'collector');
+  }
+
+  // --- 2b. Diagonal through-roads -----------------------------------------
+  // A plain grid on its own reads as a chessboard. One or two straight
+  // diagonals across it are what real planned Japanese developments have, and
+  // they give the lot subdivider some genuinely non-rectangular blocks to work
+  // with without reintroducing the fine-grained wobble.
+  for (let i = 0; i < p.diagonalCount; i++) {
+    const angle = rng.range(28, 62) * (Math.PI / 180) * (rng.chance(0.5) ? 1 : -1);
+    const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+    const through = { x: rng.range(-E * 0.5, E * 0.5), y: rng.range(-E * 0.5, E * 0.5) };
+    const line = [V.addScaled(through, dir, -E * 2), V.addScaled(through, dir, E * 2)];
+    for (const run of clipToSquare(resampleLine(line, 12), E)) pushLine(run, 'collector');
   }
 
   // --- 3. Local streets: the warped grid ----------------------------------
@@ -188,7 +214,7 @@ export function generateRoads(seed: string, p: RoadParams): RoadNetwork {
   // local grids are full of.
   for (let j = 1; j < nv; j++) {
     for (let i = 1; i < nu; i++) {
-      if (!rng.chance(p.jogFraction)) continue;
+      if (p.jogFraction <= 0 || !rng.chance(p.jogFraction)) continue;
       const dir = rng.chance(0.5) ? { x: 1, y: 0 } : { x: 0, y: 1 };
       const d = rng.range(p.jogDistance * 0.6, p.jogDistance) * (rng.chance(0.5) ? 1 : -1);
       grid[j]![i] = V.addScaled(grid[j]![i]!, dir, d);

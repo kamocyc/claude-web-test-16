@@ -1,5 +1,5 @@
 import { describe, it } from 'vitest';
-import { DEFAULT_PARAMS, cloneParams } from '../src/core/params.js';
+import { DEFAULT_PARAMS, applyRoadLayout, cloneParams, type RoadLayout } from '../src/core/params.js';
 import { generateCity } from '../src/city/City.js';
 
 /**
@@ -7,8 +7,10 @@ import { generateCity } from '../src/city/City.js';
  * so the shape of the city can be checked at a glance while tuning.
  */
 describe('city statistics', () => {
-  it('reports counts and timings', () => {
+  for (const layout of ['warped', 'grid'] as RoadLayout[]) {
+  it(`reports counts and timings (${layout} layout)`, () => {
     const params = cloneParams(DEFAULT_PARAMS);
+    applyRoadLayout(params.roads, layout);
     const t0 = performance.now();
     const city = generateCity(params);
     const total = performance.now() - t0;
@@ -27,6 +29,7 @@ describe('city statistics', () => {
     console.log(
       [
         '',
+        `layout:     ${layout}`,
         `roads:      ${city.roads.edges.length} edges, ${city.roads.privateLanes.length} private lanes`,
         `blocks:     ${city.blocks.length} (rejected ${city.rejectedBlocks.length})`,
         `lots:       ${city.lots.length}  flag lots: ${flag}`,
@@ -43,4 +46,5 @@ describe('city statistics', () => {
       ].join('\n'),
     );
   });
+  }
 });

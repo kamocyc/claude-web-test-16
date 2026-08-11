@@ -49,8 +49,6 @@ const MIN_STEP_FRACTION = 0.08;
 const MIN_BAND_MODULES = 2;
 /** The tall stack must keep at least this much of the plan. */
 const MIN_TALL_FRACTION = 0.45;
-/** Difference slivers below this are not worth a stack. */
-const MIN_STACK_AREA = 6;
 /** Never drop more than this many storeys in one step. */
 const MAX_STEP_FLOORS = 2;
 /** At most this many cuts, so at most three stacks. */
@@ -244,11 +242,21 @@ export function buildMass(
       const before = cur;
       let next = cur;
       for (const c of here) next = largest(clipHalfPlane(next, c.hp)) ?? next;
-      for (const ring of differencePoly([before], [next])) {
-        if (area(ring) < MIN_STACK_AREA) continue;
-    stacks.push(makeStack(ring, f, true, footprint, spec, params));
+
+      // Slivers are not worth a stack of their own, but they must not simply
+      // vanish either: dropping them would take that plan area off the building
+      // altogether. If the band cannot be represented, abandon the cut and
+      // leave the storey full-size — the stacks then still partition the
+      // footprint exactly, which everything downstream relies on.
+      const minRing = Math.max(1.5, baseArea * 0.03);
+      const rings = differencePoly([before], [next]).filter((r) => area(r) >= minRing);
+      const bandArea = rings.reduce((t, r) => t + area(r), 0);
+      const removed = area(before) - area(next);
+
+      if (rings.length > 0 && bandArea >= removed * 0.9) {
+        for (const ring of rings) stacks.push(makeStack(ring, f, true, footprint, spec, params));
+        cur = next;
       }
-      cur = next;
     }
     floors.push({ polygon: cur, walls: [], y0: f * h, y1: (f + 1) * h, index: f });
   }

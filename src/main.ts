@@ -1,5 +1,11 @@
 import * as THREE from 'three';
-import { DEFAULT_PARAMS, cloneParams, type CityParams } from './core/params.js';
+import {
+  DEFAULT_PARAMS,
+  applyRoadLayout,
+  cloneParams,
+  type CityParams,
+  type RoadLayout,
+} from './core/params.js';
 import { generateCity, type City } from './city/City.js';
 import { buildCityMesh, disposeCityMesh, type CityMeshResult } from './build/CityMesh.js';
 import { createMaterials, type MaterialLibrary } from './material/materials.js';
@@ -102,6 +108,10 @@ if (import.meta.env.DEV) {
 };
 (window as unknown as Record<string, unknown>).__setSeed = (seed: string) => {
   params.seed = seed;
+  regenerate();
+};
+(window as unknown as Record<string, unknown>).__setLayout = (layout: RoadLayout) => {
+  applyRoadLayout(params.roads, layout);
   regenerate();
 };
 

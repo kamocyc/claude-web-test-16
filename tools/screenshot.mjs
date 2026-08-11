@@ -21,6 +21,7 @@ const arg = (name, fallback) => {
 const URL = arg('url', 'http://127.0.0.1:5173');
 const OUT = arg('out', 'shots');
 const SEED = arg('seed', null);
+const LAYOUT = arg('layout', null);
 const ONLY = arg('only', null);
 
 /** [name, cameraPosition, lookAtTarget] */
@@ -74,6 +75,15 @@ if (SEED) {
   }, SEED);
   await page.waitForFunction(() => window.__cityReady === true, null, { timeout: 300000 });
   console.log(`seed set to ${SEED}`);
+}
+
+if (LAYOUT) {
+  await page.evaluate((l) => {
+    window.__cityReady = false;
+    window.__setLayout(l);
+  }, LAYOUT);
+  await page.waitForFunction(() => window.__cityReady === true, null, { timeout: 300000 });
+  console.log(`layout set to ${LAYOUT}`);
 }
 
 // Hide the debug panel so it does not cover the view.

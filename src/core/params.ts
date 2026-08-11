@@ -3,7 +3,20 @@
  * UI. Distances are metres, angles degrees, probabilities [0, 1].
  */
 
+/**
+ * How the street network is laid out.
+ *
+ * `warped` is the default: a grid built in a warped parameter space, thinned
+ * and jogged, which is what an organically grown Japanese suburb looks like.
+ * `grid` is the planned-development alternative — a plain orthogonal grid with
+ * a couple of diagonal through-roads, coarser and much calmer.
+ */
+export type RoadLayout = 'warped' | 'grid';
+
 export interface RoadParams {
+  layout: RoadLayout;
+  /** Straight through-roads cutting across the grid. Used by the `grid` layout. */
+  diagonalCount: number;
   /** Half-extent of the generated town, metres. */
   extent: number;
   arterialCount: number;
@@ -163,6 +176,8 @@ export interface CityParams {
 export const DEFAULT_PARAMS: CityParams = {
   seed: 'sakura-3',
   roads: {
+    layout: 'warped',
+    diagonalCount: 0,
     extent: 320,
     arterialCount: 2,
     arterialWidth: 13,
@@ -270,6 +285,42 @@ export const DEFAULT_PARAMS: CityParams = {
     textures: true,
   },
 };
+
+/**
+ * Road-layout presets. Switching layout has to move several parameters at once —
+ * a grid with the warped layout's 45 m spacing still reads as far too fine — so
+ * the presets are kept here and applied as a group.
+ */
+export const ROAD_LAYOUT_PRESETS: Record<RoadLayout, Partial<RoadParams>> = {
+  warped: {
+    localSpacing: 45,
+    warpAmplitude1: 14,
+    warpAmplitude2: 4,
+    deleteFraction: 0.18,
+    deadEndFraction: 0.12,
+    jogFraction: 0.15,
+    diagonalCount: 0,
+    collectorSpacing: 120,
+  },
+  grid: {
+    // Coarser blocks, no warp, no jogging: a laid-out development rather than
+    // an organically grown one.
+    localSpacing: 68,
+    warpAmplitude1: 0,
+    warpAmplitude2: 0,
+    deleteFraction: 0.06,
+    deadEndFraction: 0.05,
+    jogFraction: 0,
+    diagonalCount: 2,
+    collectorSpacing: 160,
+  },
+};
+
+/** Apply a layout preset in place, leaving unrelated road parameters alone. */
+export function applyRoadLayout(roads: RoadParams, layout: RoadLayout): RoadParams {
+  Object.assign(roads, ROAD_LAYOUT_PRESETS[layout], { layout });
+  return roads;
+}
 
 export function cloneParams(p: CityParams): CityParams {
   return structuredClone(p);
