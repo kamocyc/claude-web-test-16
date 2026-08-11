@@ -134,6 +134,22 @@ export interface BuildingParams {
   floorHeightApart: number;
   floorHeightMansion: number;
   minFloorArea: number;
+  /**
+   * Build the outline from the buildable area itself on an irregular lot, rather
+   * than composing module rectangles and clipping them.
+   */
+  conformIrregular: boolean;
+  /**
+   * Switch to the conforming outline when the largest inscribed rectangle covers
+   * less than this fraction of the buildable area. A rectangle scores ~0.95, a
+   * trapezoid ~0.8, a triangle ~0.5 — so 0.62 picks out triangles and strong
+   * wedges and leaves every ordinary lot on the rectangle path.
+   */
+  conformFillThreshold: number;
+  /** Corners sharper than this get a 隅切り chamfer, degrees. */
+  conformCornerAngle: number;
+  /** Length of the wall the chamfer leaves behind, metres. */
+  conformCornerCut: number;
   /** Probability that an upper-floor bay aligns with the floor below. */
   bayAlignChance: number;
   /** Probability of mirroring the whole building. */
@@ -266,6 +282,10 @@ export const DEFAULT_PARAMS: CityParams = {
     floorHeightApart: 2.75,
     floorHeightMansion: 3.0,
     minFloorArea: 19,
+    conformIrregular: true,
+    conformFillThreshold: 0.62,
+    conformCornerAngle: 55,
+    conformCornerCut: 1.2,
     bayAlignChance: 0.8,
     mirrorChance: 0.5,
     orientationJitter: 1.5,

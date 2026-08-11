@@ -44,6 +44,15 @@ export interface RoofResult {
 
 const FASCIA = 0.22;
 
+/**
+ * Ceiling on how far a 片流れ may climb from eave to ridge.
+ *
+ * The rise of a mono-pitch is span × pitch, and the span is whatever the plan
+ * measures in the fall direction — so on a long plan the roof becomes a sail
+ * rather than a roof. A real one is sized by the storey it covers.
+ */
+const MAX_SHED_RISE = 2.8;
+
 export function buildRoof(
   buf: GeometryBuffer,
   target: RoofTarget,
@@ -51,6 +60,14 @@ export function buildRoof(
   spec: BuildingSpec,
   roofType: BuildingSpec['roofType'] = spec.roofType,
 ): RoofResult {
+  // A pitched roof is assembled per constituent rectangle, so with no rectangles
+  // it would emit nothing at all and leave the building open to the sky. An
+  // outline that follows a lot boundary has none by construction; 片流れ is exact
+  // on any polygon, so that is the safe answer rather than a missing roof.
+  if (target.parts.length === 0 && (roofType === 'gable' || roofType === 'hip')) {
+    return buildShedRoof(buf, target, eaveY, spec);
+  }
+
   switch (roofType) {
     case 'flat':
       return buildFlatRoof(buf, target.polygon, eaveY, spec);
@@ -86,35 +103,52 @@ function buildShedRoof(
 ): RoofResult {
   const poly = target.polygon;
   const envelope = offsetOutward(poly, spec.eaves)[0] ?? poly;
-  const axis = spec.ridgeAlongStreet ? V.perp(target.frame.xAxis) : target.frame.xAxis;
-  const dir = V.normalize(axis);
 
-  let minT = Infinity;
-  let maxT = -Infinity;
-  for (const p of envelope) {
-    const t = V.dot(p, dir);
-    if (t < minT) minT = t;
-    if (t > maxT) maxT = t;
-  }
+  const extentAlong = (d: Vec2): { min: number; max: number } => {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const p of envelope) {
+      const t = V.dot(p, d);
+      if (t < min) min = t;
+      if (t > max) max = t;
+    }
+    return { min, max };
+  };
+
+  // ridgeAlongStreet is a stylistic preference (平入り vs 妻入り), but a
+  // mono-pitch has to run down the *short* way: a slope taken along the 25 m
+  // side of a wedge is a sail, not a roof. Honour the preference while the two
+  // are comparable, and override it when they are not.
+  const preferred = V.normalize(
+    spec.ridgeAlongStreet ? V.perp(target.frame.xAxis) : target.frame.xAxis,
+  );
+  const alternate = V.perp(preferred);
+  const ep = extentAlong(preferred);
+  const ea = extentAlong(alternate);
+  const dir = ep.max - ep.min <= (ea.max - ea.min) * 1.6 ? preferred : alternate;
+
+  const { min: minT, max: maxT } = extentAlong(dir);
   const span = Math.max(0.5, maxT - minT);
-  const heightAt = (p: Vec2) => eaveY + (V.dot(p, dir) - minT) * spec.roofPitch;
+  // Backstop for the plans that are long in every direction.
+  const pitch = Math.min(spec.roofPitch, MAX_SHED_RISE / span);
+  const heightAt = (p: Vec2) => eaveY + (V.dot(p, dir) - minT) * pitch;
 
-  const inv = 1 / Math.hypot(spec.roofPitch, 1);
+  const inv = 1 / Math.hypot(pitch, 1);
   buf.pushLiftedCap(envelope, heightAt, {
-    x: -dir.x * spec.roofPitch * inv,
+    x: -dir.x * pitch * inv,
     y: inv,
-    z: -dir.y * spec.roofPitch * inv,
+    z: -dir.y * pitch * inv,
   });
   // Underside of the slab, then the band that closes the two together and fills
   // the triangular gaps above the walls on the sides and at the high end.
   buf.pushLiftedCap(
     envelope,
     (p) => heightAt(p) - FASCIA,
-    { x: dir.x * spec.roofPitch * inv, y: -inv, z: dir.y * spec.roofPitch * inv },
+    { x: dir.x * pitch * inv, y: -inv, z: dir.y * pitch * inv },
     false,
   );
   buf.pushSkirt(envelope, eaveY - FASCIA, heightAt, 0.02);
-  return { peak: span * spec.roofPitch, envelope };
+  return { peak: span * pitch, envelope };
 }
 
 /** 切妻 / 寄棟, built per constituent rectangle. */

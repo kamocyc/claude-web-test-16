@@ -3,10 +3,11 @@ import { DEG, type BuildingParams } from '../core/params.js';
 import { makeRng, subSeed, type Rng } from '../core/rng.js';
 import { SOUTH } from '../core/types.js';
 import * as V from '../geom/vec2.js';
-import { area, centroid, edges as polyEdges, ensureCCW } from '../geom/polygon.js';
-import { clipHalfPlane } from '../geom/halfplane.js';
+import { area, centroid, edges as polyEdges, ensureCCW, maxInscribedCircle } from '../geom/polygon.js';
+import { clipHalfPlane, insetEdgeHalfPlane } from '../geom/halfplane.js';
 import { differencePoly, intersectPoly, largest, multiArea, unionPoly } from '../geom/boolean.js';
 import { cleanPolygon } from '../geom/simplify.js';
+import { offsetInward, offsetInwardVariable } from '../geom/offset.js';
 import { bestInscribedRect } from '../geom/inscribedRect.js';
 import {
   extentsIn,
@@ -25,12 +26,23 @@ import type { BuildEnvelope, BuildingSpec, Footprint, SlantPlane, Wall, WallRole
  * Buildable envelope and footprint fitting.
  *
  * This module is the answer to "buildings must sit naturally on non-rectangular
- * lots". The approach is the one real Japanese architects use on odd parcels:
- * design a near-rectangular mass on the module grid, then **clip it against the
- * buildable area**. What comes out is a mostly-rectangular building with one
- * corner sliced off at the lot's odd angle — exactly what the real ones look
- * like — and "fits an arbitrary polygon" becomes a single boolean intersection
- * instead of a research problem.
+ * lots", and it takes two different routes depending on how odd the parcel is.
+ *
+ * **Mildly odd — compose and clip.** Design a near-rectangular mass on the
+ * module grid, then clip it against the buildable area. What comes out is a
+ * mostly-rectangular building with one corner sliced off at the lot's odd angle —
+ * exactly what the real ones look like — and "fits an arbitrary polygon" becomes
+ * a single boolean intersection instead of a research problem.
+ *
+ * **Genuinely irregular — follow the boundary.** On a wedge left where two
+ * streets meet at an angle, compose-and-clip breaks down: the inscribed
+ * rectangle is half the parcel, growing it only reaches the frame's bounding
+ * box, and the clip takes the growth straight back off. Below
+ * `conformFillThreshold` the outline is therefore built *from the buildable area
+ * itself* — chamfer the acute corners (隅切り), then push the non-street walls in
+ * until the coverage limit is met. Every wall then runs parallel to the boundary
+ * it came from, which is what a real 変形地 house looks like, and the parcel gets
+ * a building at all rather than being written off as unbuildable.
  */
 
 /** Snap to the 910 mm half-ken module — the dimensional grid Japanese houses use. */
@@ -57,19 +69,17 @@ export function computeEnvelope(
   }
 
   const wantsPad = spec.wantsCarPad;
-  let buildableParts: Polygon[] = [lot.polygon];
+  const setbackOf = (i: number): number =>
+    frontIdx.has(i)
+      ? // The front setback exists so the car pad has somewhere to go.
+        params.frontSetback + (wantsPad ? params.carPadDepth : 0)
+      : i === rearIdx
+        ? params.rearSetback
+        : params.sideSetback; // 民法234条: 50 cm from the boundary
 
+  let buildableParts: Polygon[] = [lot.polygon];
   for (const e of polyEdges(lot.polygon)) {
-    let inset: number;
-    if (frontIdx.has(e.i)) {
-      // The front setback exists so the car pad has somewhere to go.
-      inset = params.frontSetback + (wantsPad ? params.carPadDepth : 0);
-    } else if (e.i === rearIdx) {
-      inset = params.rearSetback;
-    } else {
-      inset = params.sideSetback; // 民法234条: 50 cm from the boundary
-    }
-    const hp = { origin: V.addScaled(e.a, e.normal, inset), normal: e.normal };
+    const hp = { origin: V.addScaled(e.a, e.normal, setbackOf(e.i)), normal: e.normal };
     const next: Polygon[] = [];
     for (const p of buildableParts) next.push(...clipHalfPlane(p, hp));
     buildableParts = next;
@@ -88,6 +98,21 @@ export function computeEnvelope(
     spec.wantsCarPad = false;
     return computeEnvelope(lot, spec, params);
   }
+
+  // The half-plane intersection above is exact on a convex parcel and cheap, but
+  // on a concave one — an L-shaped remainder, a flag lot's yard — the plane of
+  // an edge behind a reflex corner cuts right across the parcel. Twenty-eight
+  // parcels a town, several over 300 m², were coming out with *no* buildable
+  // area at all and standing empty. Fall back to a band subtraction, which is
+  // correct on a concave ring; only parcels the fast path has already given up
+  // on reach it, so nothing that works today changes.
+  if (!buildable || area(buildable) < params.minFloorArea) {
+    let rescued: Polygon[] = offsetInwardVariable(lot.polygon, setbackOf);
+    if (lot.poleCorridor && rescued.length > 0) rescued = differencePoly(rescued, [lot.poleCorridor]);
+    const best = largest(rescued);
+    if (best && (!buildable || area(best) > area(buildable))) buildable = best;
+  }
+
   if (buildable) buildable = cleanPolygon(buildable, { tolerance: 0.05, minEdge: 0.25, minArea: 4 });
 
   // The strip between the front setback line and the street: the car pad.
@@ -255,11 +280,29 @@ export function fitFootprint(
     (r, i) => r.w * r.d * (i === 0 ? 1.08 : 1),
     0.2,
   );
-  if (!best) return null;
 
-  const workFrame = best.frame;
+  const workFrame = best?.frame ?? frameRotated;
+  let conformTried = false;
+  const conform = (): Footprint | null => {
+    if (conformTried || !params.conformIrregular) return null;
+    conformTried = true;
+    return conformFootprint(buildable, lot, spec, params, workFrame, rng);
+  };
+
+  // No rectangle fits at all — a sliver barely wider than the raster cell.
+  if (!best) return conform();
+
   let candidateRect = best.rect;
   const inscribedArea = candidateRect.w * candidateRect.d;
+
+  // How much of the buildable area a rectangle can actually claim. A rectangular
+  // parcel scores near 1, a trapezoid around 0.8, a triangle about 0.5 — so this
+  // separates "odd enough to clip a corner off" from "odd enough that a
+  // rectangle is the wrong idea entirely".
+  if (inscribedArea < buildableArea * params.conformFillThreshold) {
+    const conformed = conform();
+    if (conformed) return conformed;
+  }
 
   if (inscribedArea > targetArea) {
     // Trim toward the target, keeping the street-facing edge fixed so the
@@ -316,6 +359,7 @@ export function fitFootprint(
             frame: workFrame,
             clipped: clippedFraction > 0.005,
             clippedFraction,
+            conform: false,
             walls: classifyWalls(cleaned, lot, spec),
             area: area(cleaned),
           };
@@ -330,7 +374,202 @@ export function fitFootprint(
       scale = 1;
     }
   }
-  return null;
+
+  // Nothing rectangular fits. Before writing the parcel off as unbuildable —
+  // which leaves a visible hole in the block — try following its shape.
+  return conform();
+}
+
+/**
+ * An outline taken from the buildable area itself: the answer to a triangular
+ * parcel, where every rectangle is either too small to build on or too big to
+ * fit.
+ */
+function conformFootprint(
+  buildable: Polygon,
+  lot: Lot,
+  spec: BuildingSpec,
+  params: BuildingParams,
+  frame: Frame,
+  rng: Rng,
+): Footprint | null {
+  // The half-plane clipping in `computeEnvelope` leaves fans of near-collinear
+  // 10 cm edges behind. Merge them into single walls, or the façade grammar
+  // divides an 8 cm panel into bays.
+  const simplified = cleanPolygon(buildable, {
+    tolerance: 0.2,
+    minEdge: 0.6,
+    maxTurn: 6 * DEG,
+    minArea: params.minFloorArea * 0.5,
+  });
+  if (!simplified) return null;
+
+  const chamfered = chamferAcuteCorners(
+    simplified,
+    params.conformCornerAngle * DEG,
+    params.conformCornerCut,
+  );
+
+  // Fuller than the rectangle path allows: using the whole buildable area is the
+  // point of a 変形地 house, and the setbacks have already reserved the garden.
+  // The floor keeps a parcel with barely more than the minimum buildable area
+  // from being shrunk below it and thrown away — 建ぺい率 on a 55 m² parcel is
+  // 34 m², so the floor can never breach the coverage limit.
+  const target = Math.max(
+    params.minFloorArea,
+    Math.min(lot.area * spec.coverage, area(buildable) * rng.range(0.82, 0.97)),
+  );
+  const sized = shrinkToArea(chamfered, target, lot.faceDir);
+
+  const cleaned = cleanFootprint(sized, params);
+  if (!cleaned || area(cleaned) < params.minFloorArea) return null;
+  // A long enough ribbon clears the minimum floor area while being a metre
+  // wide — a wall, not a building. The rectangle path can't produce one because
+  // it floors both sides at three modules; this is the equivalent guard, and a
+  // parcel that fails it is better left empty than built on.
+  if (maxInscribedCircle(cleaned, 0.25).radius < params.module * 1.35) return null;
+
+  // This outline was not composed from rectangles, so there is no span for a
+  // ridge to sit over. 片流れ is exact on any polygon — as is 陸屋根 — and both
+  // are what actually gets built on a narrow irregular site.
+  if (spec.roofType === 'gable' || spec.roofType === 'hip') {
+    spec.roofType = 'shed';
+    // A 瓦 pitch of 0.45–0.6 run one way across a 10 m wedge is a 5 m rise.
+    spec.roofPitch = Math.min(spec.roofPitch, 0.28);
+    if (spec.roofFamily === 'roofKawara') spec.roofFamily = 'roofMetal';
+  }
+
+  return {
+    outline: cleaned,
+    // Deliberately empty: there is no rectangle here to drive a pitched roof,
+    // and `buildRoof` reads this to know it must not try.
+    parts: [],
+    frame,
+    clipped: true,
+    clippedFraction: 0,
+    conform: true,
+    walls: classifyWalls(cleaned, lot, spec),
+    area: area(cleaned),
+  };
+}
+
+/**
+ * 隅切り: cut the sharp corners off.
+ *
+ * A parcel where two streets meet at 25° ends in a needle. Left alone it becomes
+ * a pair of walls a few centimetres apart, which the façade grammar cannot
+ * divide and the eaves offsetter cannot round. Chamfering is also what the law
+ * requires of a real corner lot, so the fix and the reference agree.
+ */
+function chamferAcuteCorners(poly: Polygon, minAngle: number, cut: number): Polygon {
+  if (cut <= 0) return poly;
+  let out = poly;
+
+  // One cut per pass, rescanning afterwards: a clip renumbers the vertices, and
+  // a chamfered corner is no longer acute, so this terminates.
+  for (let pass = 0; pass < 4; pass++) {
+    const n = out.length;
+    let cutOne = false;
+
+    for (let i = 0; i < n; i++) {
+      const v = out[i]!;
+      const prev = out[(i - 1 + n) % n]!;
+      const next = out[(i + 1) % n]!;
+      // Rings are CCW, so a convex vertex turns left.
+      if (V.cross(V.sub(v, prev), V.sub(next, v)) <= 0) continue;
+
+      const a = V.sub(prev, v);
+      const b = V.sub(next, v);
+      const la = V.len(a);
+      const lb = V.len(b);
+      if (la < 1e-6 || lb < 1e-6) continue;
+      const theta = V.angleBetween(a, b);
+      if (theta >= minAngle) continue;
+
+      // Cutting perpendicular to the bisector at distance t from the apex leaves
+      // a face of length 2·t·tan(θ/2).
+      const t = cut / (2 * Math.tan(theta / 2));
+      // A chamfer that eats a whole neighbouring wall means the shape is a
+      // needle end to end; cutting it would replace the building, not its corner.
+      if (t > 0.35 * Math.min(la, lb)) continue;
+
+      const bisector = V.normalize(V.add(V.scale(a, 1 / la), V.scale(b, 1 / lb)));
+      const clipped = largest(
+        clipHalfPlane(out, { origin: V.addScaled(v, bisector, t), normal: bisector }),
+      );
+      if (!clipped) continue;
+      out = clipped;
+      cutOne = true;
+      break;
+    }
+    if (!cutOne) break;
+  }
+  return out;
+}
+
+/**
+ * Bring a conforming outline down to the coverage limit by pushing its walls
+ * inward, which is the only shrink that keeps every wall parallel to the
+ * boundary it came from.
+ */
+function shrinkToArea(poly: Polygon, target: number, faceDir: Vec2): Polygon {
+  if (area(poly) <= target) return poly;
+
+  // Hold the street-facing walls and push the rest back, so the front setback —
+  // and with it the alignment of the streetscape — survives the shrink.
+  const movable = polyEdges(poly).filter((e) => V.dot(V.neg(e.normal), faceDir) <= 0.55);
+  let out = poly;
+  if (movable.length >= 2) {
+    const limit = maxInscribedCircle(poly, 0.3).radius * 1.6;
+    out =
+      searchInset(poly, target, limit, (p, d) => {
+        let parts: Polygon[] = [p];
+        for (const e of movable) {
+          const hp = insetEdgeHalfPlane(e.a, e.normal, d);
+          const next: Polygon[] = [];
+          for (const q of parts) next.push(...clipHalfPlane(q, hp));
+          parts = next;
+          if (parts.length === 0) return null;
+        }
+        return largest(parts);
+      }) ?? poly;
+    if (area(out) <= target * 1.02) return out;
+  }
+
+  // A shape that is nearly all frontage cannot be shrunk that way. A uniform
+  // inward offset always can, which is what makes the coverage cap a guarantee
+  // rather than an attempt.
+  const radius = maxInscribedCircle(out, 0.3).radius;
+  return searchInset(out, target, radius, (p, d) => largest(offsetInward(p, d))) ?? out;
+}
+
+/**
+ * Smallest inset distance in `[0, limit]` whose result is within the area
+ * target. Area falls monotonically with the distance, so bisection converges;
+ * seven steps put a 5 m bracket inside 4 cm.
+ */
+function searchInset(
+  poly: Polygon,
+  target: number,
+  limit: number,
+  apply: (p: Polygon, d: number) => Polygon | null,
+): Polygon | null {
+  if (limit <= 1e-3) return null;
+  let lo = 0;
+  let hi = limit;
+  let out: Polygon | null = null;
+
+  for (let i = 0; i < 7; i++) {
+    const mid = (lo + hi) / 2;
+    const candidate = apply(poly, mid);
+    if (candidate && area(candidate) > target) {
+      lo = mid;
+    } else {
+      hi = mid;
+      if (candidate) out = candidate;
+    }
+  }
+  return out;
 }
 
 /**

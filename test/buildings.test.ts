@@ -5,7 +5,9 @@ import { makeBuildingSpec, clusterStyle } from '../src/building/style.js';
 import { computeEnvelope, fitFootprint } from '../src/building/footprint.js';
 import { buildMass } from '../src/building/mass.js';
 import type { StyleVector } from '../src/building/types.js';
-import { area, isSimple } from '../src/geom/polygon.js';
+import { buildRoof } from '../src/building/roof.js';
+import { GeometryBuffer } from '../src/build/GeometryBuffer.js';
+import { area, isSimple, perimeter } from '../src/geom/polygon.js';
 import { multiArea, intersectPoly } from '../src/geom/boolean.js';
 
 function build(seed = 'bld-1') {
@@ -134,6 +136,60 @@ describe('building geometry', () => {
     }
   });
 
+  /**
+   * A conforming outline is not composed of rectangles, so the pitched-roof
+   * builder has nothing to work from and would emit no geometry at all. The roof
+   * must both exist and stay within an eave's overhang of the walls.
+   */
+  it('a conforming outline gets a roof that covers it and nothing more', () => {
+    const conforming = built.filter((b) => b.footprint.conform);
+    expect(conforming.length, 'no conforming footprints were generated at all').toBeGreaterThan(5);
+
+    for (const b of conforming) {
+      expect(b.footprint.parts, `lot ${b.lot.id}`).toEqual([]);
+      // 切妻 and 寄棟 need a span; the fitter is required to have downgraded them.
+      expect(['flat', 'shed'], `lot ${b.lot.id}`).toContain(b.spec.roofType);
+
+      for (const stack of b.mass.stacks) {
+        const buf = new GeometryBuffer();
+        const roof = buildRoof(buf, stack, stack.y1, b.spec);
+        expect(buf.triangleCount, `lot ${b.lot.id} stack ${stack.index} has no roof`).toBeGreaterThan(0);
+        const plan = area(stack.polygon);
+        const limit = plan + perimeter(stack.polygon) * b.spec.eaves * 1.3;
+        expect(area(roof.envelope), `lot ${b.lot.id} stack ${stack.index}`).toBeLessThan(limit);
+      }
+    }
+  });
+
+  /**
+   * The point of the conforming path: walls that run parallel to the boundary
+   * they came from. Sampling the outline and checking how much of it hugs the
+   * lot at the setback distance is the cheapest way to assert that.
+   */
+  it('a conforming outline follows its lot boundary', () => {
+    for (const b of built.filter((x) => x.footprint.conform)) {
+      const lotEdges = b.lot.polygon.length;
+      let parallel = 0;
+      for (const w of b.footprint.walls) {
+        for (const e of b.lot.polygon.map((_, i) => i)) {
+          const a = b.lot.polygon[e]!;
+          const c = b.lot.polygon[(e + 1) % lotEdges]!;
+          const dir = { x: c.x - a.x, y: c.y - a.y };
+          const l = Math.hypot(dir.x, dir.y);
+          if (l < 0.5) continue;
+          const align = Math.abs((w.dir.x * dir.x + w.dir.y * dir.y) / l);
+          if (align > 0.985) {
+            parallel++;
+            break;
+          }
+        }
+      }
+      // Chamfers and the shrink's own cuts are not boundary-parallel, so this is
+      // a majority test rather than an all-walls one.
+      expect(parallel / b.footprint.walls.length, `lot ${b.lot.id}`).toBeGreaterThan(0.5);
+    }
+  });
+
   const pct = (xs: number[], f: number) => {
     const s2 = xs.slice().sort((a, b) => a - b);
     return (s2[Math.floor(s2.length * f)] ?? 0).toFixed(2);
@@ -149,9 +205,11 @@ describe('building geometry', () => {
     let wantsPad = 0;
     let hasPad = 0;
     const coverages: number[] = [];
+    const conformCoverages: number[] = [];
     const stackCounts: Record<number, number> = {};
     let steppedCount = 0;
     for (const b of built) {
+      if (b.footprint.conform) conformCoverages.push(b.footprint.area / b.lot.area);
       if (b.spec.wantsCarPad) wantsPad++;
       if (b.envelope.carPad) hasPad++;
       kinds[b.spec.kind] = (kinds[b.spec.kind] ?? 0) + 1;
@@ -167,7 +225,10 @@ describe('building geometry', () => {
     console.log(
       [
         '',
-        `built:       ${built.length} / ${city.lots.length} lots`,
+        `built:       ${built.length} / ${city.lots.length} lots` +
+          ` (${city.lots.length - built.length} unbuildable)`,
+        `conform:     ${conformCoverages.length} outlines follow the lot boundary` +
+          `, coverage p50=${pct(conformCoverages, 0.5)}`,
         `kinds:       ${JSON.stringify(kinds)}`,
         `floors:      ${JSON.stringify(floors)}`,
         `roofs:       ${JSON.stringify(roofs)}`,

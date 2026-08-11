@@ -92,6 +92,48 @@ export function offsetOutward(poly: Polygon, d: number): Polygon[] {
   return unionPoly([poly, ...boundaryBand(poly, d)]);
 }
 
+/**
+ * Inward offset with a different distance per edge — setbacks, which are never
+ * uniform.
+ *
+ * Intersecting one half-plane per edge is the cheap way to do this and is exact
+ * on a convex ring. On a concave one it is badly wrong: the plane of an edge
+ * tucked behind a reflex corner runs right across the polygon, so with a dozen
+ * edges the intersection collapses to nothing. Removing only the band actually
+ * within `inset(i)` of edge `i` is correct either way.
+ *
+ * `inset` is indexed by the edge's `i`, i.e. the index of its first vertex.
+ */
+export function offsetInwardVariable(poly: Polygon, inset: (edgeIndex: number) => number): Polygon[] {
+  const es = edges(poly);
+  if (es.length < 3) return [];
+  const band: Polygon[] = [];
+
+  for (const e of es) {
+    const d = inset(e.i);
+    if (d <= 1e-9) continue;
+    band.push([
+      V.addScaled(e.a, e.normal, -d),
+      V.addScaled(e.b, e.normal, -d),
+      V.addScaled(e.b, e.normal, d),
+      V.addScaled(e.a, e.normal, d),
+    ]);
+  }
+  // Round joins close the band at the corners. A disc rather than an overshoot
+  // along the edge, because an overshoot past a *reflex* vertex would eat into
+  // the neighbouring wing of the polygon rather than into its own setback.
+  for (let i = 0; i < es.length; i++) {
+    const d = Math.max(inset(es[i]!.i), inset(es[(i - 1 + es.length) % es.length]!.i));
+    if (d > 1e-9) band.push(circlePolygon(es[i]!.a, d, DISC_SEGMENTS));
+  }
+
+  if (band.length === 0) {
+    const c = cleanPolygon(poly);
+    return c ? [c] : [];
+  }
+  return differencePoly([poly], band);
+}
+
 /** Signed convenience wrapper: positive grows, negative shrinks. */
 export const offsetPoly = (poly: Polygon, delta: number): Polygon[] =>
   delta >= 0 ? offsetOutward(poly, delta) : offsetInward(poly, -delta);

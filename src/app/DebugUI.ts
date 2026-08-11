@@ -115,6 +115,10 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fBuild.add(params.buildings, 'mansionFar', 1, 6, 0.1).name('容積率(マンション)');
   fBuild.add(params.buildings, 'houseHeightLimit', 6, 20, 0.5).name('絶対高さ制限(低層)');
   fBuild.add(params.buildings, 'northSlantSlope', 0.5, 3, 0.05).name('北側斜線の勾配');
+  fBuild.add(params.buildings, 'conformIrregular').name('変形地は敷地なりに');
+  fBuild.add(params.buildings, 'conformFillThreshold', 0.3, 0.95, 0.01).name('敷地なり切替の閾値');
+  fBuild.add(params.buildings, 'conformCornerAngle', 20, 90, 1).name('隅切りする角度(度)');
+  fBuild.add(params.buildings, 'conformCornerCut', 0, 3, 0.1).name('隅切りの長さ(m)');
   fBuild.add(params.buildings, 'mirrorChance', 0, 1, 0.05).name('ミラーリング率');
   fBuild.add(params.buildings, 'orientationJitter', 0, 8, 0.1).name('向きのばらつき(度)');
   fBuild.add(params.buildings, 'bayAlignChance', 0, 1, 0.05).name('上下階の開口を揃える');

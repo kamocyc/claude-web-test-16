@@ -134,12 +134,18 @@ export interface Wall {
 
 export interface Footprint {
   outline: Polygon;
-  /** Local-frame rectangles the shape was composed from; these drive the roof. */
+  /**
+   * Local-frame rectangles the shape was composed from; these drive the roof.
+   * Empty on a conforming outline, which was not composed from rectangles and
+   * therefore cannot carry a gable or a hip.
+   */
   parts: LocalRect[];
   frame: Frame;
   clipped: boolean;
   /** Fraction of the composed shape that the buildable clip removed. */
   clippedFraction: number;
+  /** The outline follows the lot boundary instead of being a clipped rectangle. */
+  conform: boolean;
   walls: Wall[];
   area: number;
 }
