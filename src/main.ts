@@ -19,6 +19,7 @@ const materials: MaterialLibrary = createMaterials(
   viewer.renderer.capabilities.getMaxAnisotropy(),
 );
 const environment = new Environment(viewer.scene, viewer.renderer, params.render);
+materials.setIblAvailable(environment.supportsPmrem);
 const controls = new Controls(viewer.camera, viewer.renderer.domElement, params.roads.extent + 40);
 const overlay = new DebugOverlay(viewer.scene);
 

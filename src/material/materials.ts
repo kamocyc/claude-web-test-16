@@ -39,6 +39,12 @@ export interface MaterialLibrary {
   buildingFamilies: MaterialFamily[];
   setEnvironment(env: THREE.Texture | null): void;
   setTexturesEnabled(on: boolean): void;
+  /**
+   * Glass reads as glass because of what it reflects. With no image-based
+   * lighting there is nothing to reflect and every window becomes a black
+   * hole, so switch it to a lighter, more diffuse glazing instead.
+   */
+  setIblAvailable(on: boolean): void;
   dispose(): void;
 }
 
@@ -130,6 +136,13 @@ export function createMaterials(anisotropy: number): MaterialLibrary {
           m.needsUpdate = true;
         }
       }
+    },
+    setIblAvailable(on) {
+      const glass = materials.glass as THREE.MeshStandardMaterial;
+      glass.color.setHex(on ? 0x141c26 : 0x3f4a57);
+      glass.roughness = on ? 0.06 : 0.22;
+      glass.envMapIntensity = on ? 2.0 : 1.0;
+      glass.needsUpdate = true;
     },
     setTexturesEnabled(on) {
       for (const [name, t] of textured) {

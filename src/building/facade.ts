@@ -51,10 +51,17 @@ export function buildFacades(
 ): void {
   const module = params.module;
 
+  // Slot patterns from the floor below, keyed by wall position. Upper-floor
+  // openings snap to them most of the time: windows that do not line up
+  // vertically are the single clearest tell of a naive procedural façade.
+  let previous = new Map<string, BayKind[]>();
+
   for (const floor of floors) {
     // Walls are taken from the floor's own outline, so slant-clipped upper
     // floors get their own (shorter) wall set rather than the base one.
     const walls = wallsForFloor(footprint, floor);
+    const current = new Map<string, BayKind[]>();
+
     for (let w = 0; w < walls.length; w++) {
       const wall = walls[w]!;
       if (wall.len < module * 1.2) {
@@ -62,10 +69,38 @@ export function buildFacades(
         continue;
       }
       const rng = makeRng(subSeed(seed, 'facade', floor.index, w));
-      const bays = layoutWall(wall, floor, spec, params, rng);
-      buildWallGeometry(bufs, wall, floor, bays, spec, params, rng);
+      const key = wallKey(wall);
+      const kinds = layoutWall(wall, floor, spec, params, rng, previous.get(key));
+      current.set(key, kinds);
+      buildWallGeometry(bufs, wall, floor, baysFromKinds(kinds, module), spec, rng);
     }
+    previous = current;
   }
+}
+
+/**
+ * A position-based key so an upper floor can find the wall directly below it
+ * even when the slant planes have changed the vertex order.
+ */
+function wallKey(wall: Wall): string {
+  const mid = V.lerp(wall.a, wall.b, 0.5);
+  return `${Math.round(mid.x)},${Math.round(mid.y)},${Math.round(wall.normal.x * 4)},${Math.round(wall.normal.y * 4)}`;
+}
+
+/** Merge a slot array into contiguous bays. */
+function baysFromKinds(kinds: BayKind[], module: number): Bay[] {
+  const margin = module * 0.6;
+  const bays: Bay[] = [];
+  let i = 0;
+  while (i < kinds.length) {
+    const kind = kinds[i]!;
+    let j = i + 1;
+    // Windows stay one slot wide; everything else merges into a run.
+    while (j < kinds.length && kinds[j] === kind && kind !== 'window' && kind !== 'windowSmall') j++;
+    bays.push({ kind, u0: margin + i * module, u1: margin + j * module });
+    i = j;
+  }
+  return bays;
 }
 
 /**
@@ -117,7 +152,8 @@ function layoutWall(
   spec: BuildingSpec,
   params: BuildingParams,
   rng: Rng,
-): Bay[] {
+  below: BayKind[] | undefined,
+): BayKind[] {
   const module = params.module;
   // Reserve a corner return at each end — openings never run into a corner.
   const margin = module * 0.6;
@@ -167,25 +203,43 @@ function layoutWall(
     }
   }
 
+  // Inherit the pattern from the floor below wherever that floor had an
+  // opening, so windows stack vertically. This is the highest-value rule in the
+  // whole grammar — misaligned openings read as wrong immediately, even to
+  // someone who could not say why.
+  if (below) {
+    for (let i = 0; i < Math.min(slots, below.length); i++) {
+      if (kinds[i] !== 'blank') continue;
+      const under = below[i]!;
+      if (under === 'blank') continue;
+      if (!rng.chance(params.bayAlignChance)) continue;
+      // A door or garage below becomes an ordinary window above.
+      kinds[i] = under === 'door' || under === 'garage' || under === 'unitDoor' ? 'window' : under;
+    }
+  }
+
   // Fill the rest with windows, at a probability that depends on which way the
   // wall faces. North and rear elevations really are much blanker in Japan.
-  const p = wall.role === 'front' ? (wall.sunFacing ? 0.75 : 0.55) : wall.sunFacing ? 0.6 : wall.role === 'rear' ? 0.22 : 0.3;
+  const p =
+    wall.role === 'front'
+      ? wall.sunFacing
+        ? 0.75
+        : 0.55
+      : wall.sunFacing
+        ? 0.6
+        : wall.role === 'rear'
+          ? 0.22
+          : 0.3;
   for (let i = 0; i < slots; i++) {
     if (kinds[i] !== 'blank') continue;
+    // A slot the floor below deliberately left blank usually stays blank.
+    if (below && below[i] === 'blank' && rng.chance(params.bayAlignChance)) continue;
     if (rng.chance(p)) kinds[i] = ground && rng.chance(0.25) ? 'windowSmall' : 'window';
   }
 
-  // Merge runs of the same kind into bays.
-  const bays: Bay[] = [];
-  let i = 0;
-  while (i < slots) {
-    const kind = kinds[i]!;
-    let j = i + 1;
-    while (j < slots && kinds[j] === kind && kind !== 'window' && kind !== 'windowSmall') j++;
-    bays.push({ kind, u0: margin + i * module, u1: margin + j * module });
-    i = j;
-  }
-  return bays;
+  // Mirroring the slot order doubles apparent variety for nothing, and is
+  // literally what a developer does when reusing a house plan on the next lot.
+  return spec.mirrored ? kinds.slice().reverse() : kinds;
 }
 
 function plainWall(buf: GeometryBuffer, wall: Wall, floor: Floor, spec: BuildingSpec): void {
@@ -207,7 +261,6 @@ function buildWallGeometry(
   floor: Floor,
   bays: Bay[],
   spec: BuildingSpec,
-  params: BuildingParams,
   rng: Rng,
 ): void {
   const buf = bufs.wall;
@@ -284,7 +337,6 @@ function buildWallGeometry(
   }
   solid(cursor, wall.len, floor.y0, floor.y1);
   void wallH;
-  void params;
 }
 
 function buildWindow(
@@ -455,7 +507,9 @@ function buildBalcony(
   const railH = 1.1;
   const slabT = 0.16;
 
-  const corners = [at(u0, 0), at(u1, 0), at(u1, -depth), at(u0, -depth)];
+  // `at(u, offset)` offsets along the wall's *outward* normal, so the balcony
+  // projects with a positive depth. A negative one buries it inside the flat.
+  const corners = [at(u0, 0), at(u1, 0), at(u1, depth), at(u0, depth)];
   const slab: Vec2[] = [corners[0]!, corners[1]!, corners[2]!, corners[3]!];
 
   const w = bufs.wall;
