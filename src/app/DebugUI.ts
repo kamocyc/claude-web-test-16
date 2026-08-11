@@ -79,6 +79,7 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fRoads.add(params.roads, 'diagonalCount', 0, 4, 1).name('斜め道路の本数');
   fRoads.add(params.roads, 'extent', 120, 600, 10).name('街の広さ');
   fRoads.add(params.roads, 'localSpacing', 25, 90, 1).name('区画街路の間隔');
+  fRoads.add(params.roads, 'gridSpacingVariation', 0, 0.5, 0.01).name('格子間隔の変動(格子のみ)');
   fRoads.add(params.roads, 'warpAmplitude1', 0, 40, 1).name('歪み(大)');
   fRoads.add(params.roads, 'warpAmplitude2', 0, 15, 0.5).name('歪み(小)');
   fRoads.add(params.roads, 'deleteFraction', 0, 0.45, 0.01).name('街路の間引き率');

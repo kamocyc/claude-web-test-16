@@ -26,6 +26,13 @@ export interface RoadParams {
   localWidth: number;
   /** Nominal spacing of the local street grid before warping. */
   localSpacing: number;
+  /**
+   * `grid` layout only: how much neighbouring street spacings differ, as a
+   * fraction of `localSpacing`. 0 is a perfectly even grid; 0.2 gives blocks
+   * between 0.8× and 1.2× the nominal size, which is what a real 区画整理
+   * development looks like once it has been fitted to the parcels it replaced.
+   */
+  gridSpacingVariation: number;
   /** Long-wavelength warp: amplitude and wavelength. */
   warpAmplitude1: number;
   warpWavelength1: number;
@@ -185,6 +192,7 @@ export const DEFAULT_PARAMS: CityParams = {
     collectorSpacing: 120,
     localWidth: 4.8,
     localSpacing: 45,
+    gridSpacingVariation: 0.2,
     warpAmplitude1: 14,
     warpWavelength1: 180,
     warpAmplitude2: 4,
@@ -303,16 +311,23 @@ export const ROAD_LAYOUT_PRESETS: Record<RoadLayout, Partial<RoadParams>> = {
     collectorSpacing: 120,
   },
   grid: {
-    // Coarser blocks, no warp, no jogging: a laid-out development rather than
-    // an organically grown one.
-    localSpacing: 68,
+    // A complete orthogonal grid — every street runs the full width of the
+    // town, nothing is deleted and nothing dead-ends — with the spacing between
+    // neighbouring streets varying by ±20%, plus two diagonal through-roads.
+    // Coarser than the warped layout: without the jogs and dead ends a 45 m
+    // grid still reads as calm, and the blocks have to be deep enough for two
+    // back-to-back rows of lots plus whatever the private lanes reach.
+    localSpacing: 52,
+    gridSpacingVariation: 0.2,
     warpAmplitude1: 0,
     warpAmplitude2: 0,
-    deleteFraction: 0.06,
-    deadEndFraction: 0.05,
+    deleteFraction: 0,
+    deadEndFraction: 0,
     jogFraction: 0,
     diagonalCount: 2,
-    collectorSpacing: 160,
+    // Every 4th grid line becomes a collector. Closer than that and too much of
+    // the town fronts a wide road, which pushes the mix towards apartments.
+    collectorSpacing: 210,
   },
 };
 
