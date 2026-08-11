@@ -11,7 +11,8 @@ import type { StyleVector } from '../src/building/types.js';
 import { buildRoof } from '../src/building/roof.js';
 import { GeometryBuffer } from '../src/build/GeometryBuffer.js';
 import { area, isSimple, perimeter } from '../src/geom/polygon.js';
-import { multiArea, intersectPoly } from '../src/geom/boolean.js';
+import { multiArea, intersectPoly, unionPoly } from '../src/geom/boolean.js';
+import { localRectPolygon, polyToWorld } from '../src/geom/obb.js';
 
 function build(seed = 'bld-1') {
   const params = cloneParams(DEFAULT_PARAMS);
@@ -135,6 +136,27 @@ describe('building geometry', () => {
         const partArea = s.parts.reduce((t, r) => t + r.w * r.d, 0);
         const stackArea = area(s.polygon);
         expect(partArea / stackArea, `lot ${b.lot.id} stack ${s.index}`).toBeLessThan(1.35);
+      }
+    }
+  });
+
+  /**
+   * The other half of the same rule, and the one that was missing: a roof must
+   * also *reach* every wall. Only the over-covering side was checked, so an
+   * L-plan — which is what the parking space's notch makes — whose short leg had
+   * no rectangular description was roofed over the long leg alone and left open
+   * to the sky above the other. 5% of stacks, the worst missing 62% of its plan.
+   *
+   * A stack with no rectangles is exempt: `buildRoof` lays a 片流れ straight on
+   * the plan polygon there, which covers it exactly by construction.
+   */
+  it('every roof reaches every wall beneath it', () => {
+    for (const b of built) {
+      for (const s of b.mass.stacks) {
+        if (s.parts.length === 0) continue;
+        const world = s.parts.map((r) => polyToWorld(localRectPolygon(r), s.frame));
+        const covered = multiArea(intersectPoly(unionPoly(world), [s.polygon]));
+        expect(covered / area(s.polygon), `lot ${b.lot.id} stack ${s.index}`).toBeGreaterThan(0.96);
       }
     }
   });

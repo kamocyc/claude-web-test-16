@@ -343,23 +343,40 @@ function refitParts(
     const part = footprint.parts[i]!;
     for (const piece of intersectPoly([world[i]!], [polygon])) {
       if (area(piece) < Math.max(4, localRectArea(part) * 0.12)) continue;
-      rects.push(...describeAsRects(piece, frame, module));
+      rects.push(...(describeAsRects(piece, frame, module) ?? []));
     }
   }
-  const cover = (rs: LocalRect[]) =>
-    rs.length === 0 ? Infinity : rs.reduce((t, r) => t + localRectArea(r), 0) / area(polygon);
-  if (cover(rects) <= 1.25) return { rects, frame, cut: true };
 
-  // The building's own frame describes this plan badly — an oblique lot cut, so
-  // the walls do not run along the frame's axes at all. Try again in the plan's
-  // own minimum-area frame, which is why the frame travels with the rectangles.
+  // The building's own frame describes this plan badly when the lot cut is
+  // oblique — the walls do not run along the frame's axes at all. The plan's own
+  // minimum-area frame is the second candidate, which is why the frame has to
+  // travel with the rectangles rather than being assumed.
   const obb = minAreaObb(polygon);
-  const viaObb = describeAsRects(polygon, obb.frame, module);
-  if (cover(viaObb) < cover(rects)) {
-    if (cover(viaObb) <= MAX_ROOF_COVER) return { rects: viaObb, frame: obb.frame, cut: true };
-  } else if (cover(rects) <= MAX_ROOF_COVER) {
-    return { rects, frame, cut: true };
+  const candidates = [
+    { rects, frame },
+    { rects: describeAsRects(polygon, obb.frame, module) ?? [], frame: obb.frame },
+  ];
+
+  const planArea = area(polygon);
+  let best: { rects: LocalRect[]; frame: Frame } | null = null;
+  let bestCover = Infinity;
+  for (const c of candidates) {
+    if (c.rects.length === 0) continue;
+    // Two-sided. Over-covering hangs roof over nothing, which is the failure the
+    // stack massing exists to prevent — but *under*-covering leaves a wall with
+    // no roof on top of it, and only the over-covering half was ever checked. An
+    // L-plan whose short leg could not be described as a rectangle was roofed
+    // over the long leg alone and left open to the sky above the other.
+    const world = c.rects.map((r) => polyToWorld(localRectPolygon(r), c.frame));
+    if (multiArea(intersectPoly(unionPoly(world), [polygon])) < planArea * 0.97) continue;
+    const over = c.rects.reduce((t, r) => t + localRectArea(r), 0) / planArea;
+    if (over > MAX_ROOF_COVER) continue;
+    if (over < bestCover) {
+      bestCover = over;
+      best = c;
+    }
   }
+  if (best) return { rects: best.rects, frame: best.frame, cut: true };
 
   // No set of rectangles describes this plan without hanging a lot of roof over
   // nothing. Report none: `buildRoof` reads that as "there is no span for a
@@ -375,19 +392,28 @@ function refitParts(
  * roofing that L's bounding box hangs four metres of roof over the car with no
  * wall under it — the same floating-roof failure the stack massing exists to
  * prevent. Cutting through the inside corner describes the L properly instead.
+ *
+ * Returns `null`, never a partial answer, when the piece has no rectangular
+ * description at all. The distinction matters: an empty array reads as "this
+ * piece needs no roof", and the caller believed it.
  */
-function describeAsRects(piece: Polygon, frame: Frame, module: number, depth = 0): LocalRect[] {
+function describeAsRects(
+  piece: Polygon,
+  frame: Frame,
+  module: number,
+  depth = 0,
+): LocalRect[] | null {
   const box = extentsIn(piece, frame);
-  const fits = box.w >= module * 2 && box.d >= module * 2;
   const boxArea = localRectArea(box);
-  // Near-rectangular, or out of splits: take the box if it describes the piece
-  // at all, and otherwise nothing — an oblique lot cut is not a roof rectangle.
-  if (area(piece) >= boxArea * 0.85 || depth >= 2) {
-    return fits && area(piece) >= boxArea * 0.6 ? [box] : [];
-  }
+  // The box describes the piece only if the piece nearly fills it, and only if
+  // it is big enough to carry a roof. An oblique lot cut is not a rectangle.
+  const asBox = (): LocalRect[] | null =>
+    box.w >= module * 2 && box.d >= module * 2 && area(piece) >= boxArea * 0.6 ? [box] : null;
+
+  if (area(piece) >= boxArea * 0.85 || depth >= 2) return asBox();
 
   const reflex = reflexVertex(piece);
-  if (!reflex) return fits && area(piece) >= boxArea * 0.6 ? [box] : [];
+  if (!reflex) return asBox();
 
   let best: LocalRect[] | null = null;
   let bestWaste = Infinity;
@@ -395,7 +421,13 @@ function describeAsRects(piece: Polygon, frame: Frame, module: number, depth = 0
     const [left, right] = splitPolygonByLine(piece, reflex, axis);
     const halves = [...left, ...right].filter((h) => area(h) >= 4);
     if (halves.length < 2) continue;
-    const rects = halves.flatMap((h) => describeAsRects(h, frame, module, depth + 1));
+    // Every half has to be describable. Skipping one both leaves that part of
+    // the plan bare and *lowers* the waste this split reports for itself — so
+    // the incomplete split beat the honest ones, and an L came out roofed over
+    // one leg only.
+    const described = halves.map((h) => describeAsRects(h, frame, module, depth + 1));
+    if (described.some((d) => d === null)) continue;
+    const rects = described.flat() as LocalRect[];
     if (rects.length === 0) continue;
     const waste = rects.reduce((t, r) => t + localRectArea(r), 0) - area(piece);
     if (waste < bestWaste) {
@@ -405,7 +437,7 @@ function describeAsRects(piece: Polygon, frame: Frame, module: number, depth = 0
   }
   // A split that wastes more than the plain box is not worth the extra roof.
   if (best && bestWaste < boxArea - area(piece)) return best;
-  return fits && area(piece) >= boxArea * 0.6 ? [box] : [];
+  return asBox();
 }
 
 /** The deepest inside corner of a plan, or null when it is convex. */
