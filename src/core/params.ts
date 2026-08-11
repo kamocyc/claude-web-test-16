@@ -114,8 +114,22 @@ export interface BuildingParams {
   frontSetback: number;
   sideSetback: number;
   rearSetback: number;
-  /** Extra front setback when a car pad is wanted. */
+  /**
+   * Depth of the parking space from the street boundary. The pad is a rectangle
+   * in one front corner of the lot, *not* a band across the whole frontage —
+   * setting the whole front elevation back by a car's length wasted about 17% of
+   * a median lot, and the wider the frontage the more it wasted.
+   */
   carPadDepth: number;
+  /** Width of the parking space along the street. */
+  carPadWidth: number;
+  /**
+   * Fraction of the buildable area a footprint aims to occupy, before the
+   * archetype's notch and the lot clip take their share. Together with the
+   * coverage limit this is what actually decides how much garden is left; the
+   * 建ぺい率 alone does not, because the setbacks usually bind first.
+   */
+  footprintFill: number;
   houseCoverage: number;
   houseFar: number;
   houseHeightLimit: number;
@@ -265,11 +279,13 @@ export const DEFAULT_PARAMS: CityParams = {
     frontSetback: 0.8,
     sideSetback: 0.5,
     rearSetback: 0.8,
-    carPadDepth: 2.6,
-    houseCoverage: 0.62,
+    carPadDepth: 5.0,
+    carPadWidth: 3.0,
+    footprintFill: 0.93,
+    houseCoverage: 0.66,
     houseFar: 1.25,
     houseHeightLimit: 10,
-    apartCoverage: 0.68,
+    apartCoverage: 0.7,
     apartFar: 2.1,
     mansionCoverage: 0.7,
     mansionFar: 3.6,

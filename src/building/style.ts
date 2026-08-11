@@ -244,6 +244,7 @@ export function makeBuildingSpec(
     fenceStyle,
     fenceHeight: fenceStyle === 'lowBlock' ? rng.range(0.5, 0.8) : rng.range(1.2, 1.85),
     wantsCarPad: kind === 'house' && rng.chance(0.82),
+    carPadAt: null, // filled in by computeEnvelope, which knows the lot
     ...(isRC ? {} : {}),
   };
 }

@@ -89,6 +89,12 @@ export interface BuildingSpec {
   fenceStyle: FenceStyle;
   fenceHeight: number;
   wantsCarPad: boolean;
+  /**
+   * Centre of the parking space, filled in by `computeEnvelope`. The façade
+   * grammar needs it so a garage opening lands at the end of the wall the car is
+   * actually parked at, rather than at a coin-flip end.
+   */
+  carPadAt: Vec2 | null;
 }
 
 export interface SlantPlane {
@@ -105,7 +111,12 @@ export interface BuildEnvelope {
   maxFAR: number;
   absoluteHeightLimit: number;
   slantPlanes: SlantPlane[];
-  /** Front setback area reserved for a car pad, if any. */
+  /**
+   * The parking space: a rectangle in one front corner of the lot, if any.
+   * It used to be computed as lot-minus-buildable, which is an annulus whose
+   * hole this pipeline drops — so it came back as the whole lot, parking the car
+   * inside the house and suppressing every shrub on the lot.
+   */
   carPad: Polygon | null;
 }
 

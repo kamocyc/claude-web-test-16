@@ -254,11 +254,14 @@ function buildPlanting(
   const blocked: Polygon[] = [built.footprint.outline];
   if (built.envelope.carPad) blocked.push(built.envelope.carPad);
   if (lot.poleCorridor) blocked.push(lot.poleCorridor);
-  const isFree = (p: Vec2): boolean => {
+  // `clearance` keeps a prop off the walls themselves, not just out of the
+  // footprint. A shrub needs half a metre; a 25 cm pot stands against the wall,
+  // and with the front setback down to 0.8 m insisting otherwise left nowhere
+  // for the pots to go at all.
+  const isFree = (p: Vec2, clearance = 0.5): boolean => {
     for (const b of blocked) if (pointInPolygon(b, p)) return false;
-    // Keep clear of the walls themselves, not just their footprint.
     for (const e of polyEdges(built.footprint.outline)) {
-      if (V.distToSegment(p, e.a, e.b) < 0.5) return false;
+      if (V.distToSegment(p, e.a, e.b) < clearance) return false;
     }
     return true;
   };
@@ -284,10 +287,18 @@ function buildPlanting(
     placed++;
   }
 
-  // Pot cluster beside the entrance.
+  // Pot cluster beside the entrance. The front setback is only 0.8 m now that
+  // the parking space is a corner notch rather than a band, so a fixed offset
+  // from the frontage would put the pots inside the house — walk along the
+  // frontage until the strip in front of the wall is actually open.
   const f = lot.frontages[0];
   if (f && rng.chance(0.7)) {
-    const base = V.addScaled(V.lerp(f.a, f.b, rng.range(0.3, 0.7)), V.neg(f.outward), 1.6);
+    let base: Vec2 | null = null;
+    for (let i = 0; i < 8 && !base; i++) {
+      const p = V.addScaled(V.lerp(f.a, f.b, rng.range(0.15, 0.85)), V.neg(f.outward), rng.range(0.3, 1.1));
+      if (isFree(p, 0.12)) base = p;
+    }
+    if (!base) return;
     const pots = 3 + rng.int(6);
     for (let i = 0; i < pots; i++) {
       const p = V.add(base, { x: rng.jitter(0.8), y: rng.jitter(0.8) });

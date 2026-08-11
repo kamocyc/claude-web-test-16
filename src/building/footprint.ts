@@ -1,9 +1,16 @@
 import type { Polygon, Vec2 } from '../core/types.js';
 import { DEG, type BuildingParams } from '../core/params.js';
 import { makeRng, subSeed, type Rng } from '../core/rng.js';
-import { SOUTH } from '../core/types.js';
+import { NORTH, SOUTH } from '../core/types.js';
 import * as V from '../geom/vec2.js';
-import { area, centroid, edges as polyEdges, ensureCCW, maxInscribedCircle } from '../geom/polygon.js';
+import {
+  area,
+  centroid,
+  edges as polyEdges,
+  ensureCCW,
+  isSimple,
+  maxInscribedCircle,
+} from '../geom/polygon.js';
 import { clipHalfPlane, insetEdgeHalfPlane } from '../geom/halfplane.js';
 import { differencePoly, intersectPoly, largest, multiArea, unionPoly } from '../geom/boolean.js';
 import { cleanPolygon } from '../geom/simplify.js';
@@ -71,8 +78,7 @@ export function computeEnvelope(
   const wantsPad = spec.wantsCarPad;
   const setbackOf = (i: number): number =>
     frontIdx.has(i)
-      ? // The front setback exists so the car pad has somewhere to go.
-        params.frontSetback + (wantsPad ? params.carPadDepth : 0)
+      ? params.frontSetback
       : i === rearIdx
         ? params.rearSetback
         : params.sideSetback; // 民法234条: 50 cm from the boundary
@@ -89,6 +95,16 @@ export function computeEnvelope(
   // A flag lot's pole is the driveway, never the building.
   if (lot.poleCorridor && buildableParts.length > 0) {
     buildableParts = differencePoly(buildableParts, [lot.poleCorridor]);
+  }
+
+  // The parking space, as a rectangle in one front corner rather than a band
+  // across the whole frontage. Cars need 2.5 m of a frontage that is often three
+  // times that, and setting the entire front elevation back by a car's length
+  // threw away about 17% of a median lot — more the wider the lot.
+  const carPad = wantsPad ? carPadRect(lot, params) : null;
+  spec.carPadAt = carPad ? centroid(carPad) : null;
+  if (carPad && buildableParts.length > 0) {
+    buildableParts = differencePoly(buildableParts, [carPad]);
   }
 
   let buildable = largest(buildableParts);
@@ -115,33 +131,57 @@ export function computeEnvelope(
 
   if (buildable) buildable = cleanPolygon(buildable, { tolerance: 0.05, minEdge: 0.25, minArea: 4 });
 
-  // The strip between the front setback line and the street: the car pad.
-  let carPad: Polygon | null = null;
-  if (wantsPad && buildable) {
-    const pad = differencePoly([lot.polygon], [buildable]);
-    const primary = lot.frontages[0]!;
-    // Keep only the piece adjacent to the primary frontage.
-    let best: Polygon | null = null;
-    let bestD = Infinity;
-    for (const p of pad) {
-      if (area(p) < 8) continue;
-      const d = V.dist(centroid(p), primary.mid);
-      if (d < bestD) {
-        bestD = d;
-        best = p;
-      }
-    }
-    carPad = best;
-  }
-
   return {
     buildable,
     maxCoverage: spec.coverage,
     maxFAR: spec.far,
     absoluteHeightLimit: spec.heightLimit,
     slantPlanes: computeSlantPlanes(lot, spec, params),
-    carPad,
+    carPad: buildable ? carPad : null,
   };
+}
+
+/**
+ * The lateral direction along the street that points furthest north.
+ *
+ * Buildings are pushed this way and the parking space goes at the other end, so
+ * the leftover land collects on the south side as one usable garden instead of
+ * two unusable 80 cm strips. That is both what a Japanese developer builds and
+ * what the balcony and 北側斜線 logic already assume about which way is which.
+ */
+function northwardAlongStreet(faceDir: Vec2): Vec2 {
+  const along = V.perp(faceDir);
+  return V.dot(along, NORTH) >= 0 ? along : V.neg(along);
+}
+
+/**
+ * The parking space: a rectangle in the front corner of the lot, on the south
+ * side of the primary frontage.
+ *
+ * It is deliberately laid hard against the boundary — parking has no setback
+ * requirement — so it overlaps the side setback strip and only costs the
+ * building the remainder.
+ */
+function carPadRect(lot: Lot, params: BuildingParams): Polygon | null {
+  const f = lot.frontages[0];
+  if (!f) return null;
+  const inward = V.neg(f.outward);
+  // The south end of the frontage, i.e. away from the side the building takes.
+  const north = northwardAlongStreet(lot.faceDir);
+  const corner = V.dot(V.sub(f.b, f.a), north) < 0 ? f.b : f.a;
+  // From the southern end of the frontage, back northward by the pad's width.
+  const along = V.scale(north, Math.min(params.carPadWidth, f.len));
+
+  // Start just outside the frontage line so the pad reliably reaches the street
+  // once it is clipped back to the lot.
+  const base = V.addScaled(corner, inward, -0.3);
+  const rect: Polygon = [
+    base,
+    V.add(base, along),
+    V.addScaled(V.add(base, along), inward, params.carPadDepth),
+    V.addScaled(base, inward, params.carPadDepth),
+  ];
+  return largest(intersectPoly([rect], [lot.polygon]));
 }
 
 /**
@@ -254,10 +294,13 @@ export function fitFootprint(
   const frameRotated: Frame = { origin: frame.origin, xAxis: V.rotate(frame.xAxis, facing - V.angleOf(V.perp(primary.outward))) };
 
   // 2. Target area from coverage, capped by what the envelope can hold.
+  //    `footprintFill` is the term that actually decides how much garden is
+  //    left: the setbacks usually take enough that the coverage limit never
+  //    binds, so the 建ぺい率 on its own moves almost nothing.
   const buildableArea = area(buildable);
   const targetArea = Math.min(
     lot.area * envelope.maxCoverage,
-    buildableArea * rng.range(0.72, 0.95),
+    buildableArea * (params.footprintFill + rng.jitter(0.07)),
   );
 
   // 3. Seed rectangle: the largest inscribed axis-aligned rect, searched over
@@ -304,14 +347,22 @@ export function fitFootprint(
     if (conformed) return conformed;
   }
 
+  // Which way along the street is north, in local-frame terms. Slack goes to the
+  // south side so it collects as one usable garden rather than a pair of 80 cm
+  // strips nobody can stand in.
+  const northSide = V.dot(workFrame.xAxis, northwardAlongStreet(lot.faceDir)) >= 0 ? 1 : -1;
+
   if (inscribedArea > targetArea) {
     // Trim toward the target, keeping the street-facing edge fixed so the
-    // setback stays constant.
+    // setback stays constant and flushing the building to the north boundary.
     const k = Math.sqrt(targetArea / inscribedArea);
     const newW = Math.max(params.module * 3, candidateRect.w * Math.max(k, 0.55));
     const newD = Math.max(params.module * 3, candidateRect.d * Math.max(k, 0.55));
     const frontEdge = candidateRect.cy - candidateRect.d / 2;
-    candidateRect = { cx: candidateRect.cx, cy: frontEdge + newD / 2, w: newW, d: newD };
+    // Staying inside the inscribed rectangle keeps this inside the buildable
+    // area, so flushing never needs a clip to make it legal.
+    const shift = (Math.max(0, candidateRect.w - newW) / 2) * northSide;
+    candidateRect = { cx: candidateRect.cx + shift, cy: frontEdge + newD / 2, w: newW, d: newD };
   } else {
     // `targetArea` used to be a ceiling only, so a building never grew to meet
     // it and coverage came out at roughly half the nominal 建ぺい率. Grow the
@@ -320,16 +371,24 @@ export function fitFootprint(
     // mass cut by the lot — which is exactly the intended shape.
     const ext = extentsIn(buildable, workFrame);
     const grow = Math.sqrt(targetArea / Math.max(1, inscribedArea));
+    const newW = Math.min(ext.w, candidateRect.w * grow);
     candidateRect = {
-      cx: candidateRect.cx,
+      // Flush north within the buildable's own extent. Any overhang past the
+      // taper is removed by the clip below, which is the documented intent.
+      cx: ext.cx + ((ext.w - newW) / 2) * northSide,
       cy: candidateRect.cy,
-      w: Math.min(ext.w, candidateRect.w * grow),
+      w: newW,
       d: Math.min(ext.d, candidateRect.d * grow),
     };
   }
 
   // 4–6. Compose, clip, and shrink until it fits.
-  let shape = spec.footprintShape;
+  //
+  // The parking space already notches the plan into an L — the archetype's own
+  // notch is documented as *being* the parking space, so composing one on top
+  // takes a second bite out of the same building for the same reason, and costs
+  // roughly 6% of the coverage across the town.
+  let shape = envelope.carPad ? 'rect' : spec.footprintShape;
   let scale = 1;
   for (let attempt = 0; attempt < 8; attempt++) {
     const rect: LocalRect = {
@@ -577,14 +636,29 @@ function searchInset(
  * grammar then divides by a near-zero length.
  */
 function cleanFootprint(poly: Polygon, params: BuildingParams): Polygon | null {
-  const cleaned = cleanPolygon(poly, {
+  const opts = {
     tolerance: 0.15,
     minEdge: 0.3,
     // Merge walls that turn by less than 4 degrees into one.
     maxTurn: 4 * DEG,
     minArea: params.minFloorArea * 0.5,
-  });
-  return cleaned ? ensureCCW(cleaned) : null;
+  };
+  const cleaned = cleanPolygon(poly, opts);
+  if (!cleaned) return null;
+  if (isSimple(cleaned)) return ensureCCW(cleaned);
+
+  // Clipping against an L-shaped buildable — which is what the car pad's notch
+  // makes it — can pinch the result into a ring that touches itself, and merging
+  // near-collinear walls can close the neck the rest of the way. A union
+  // decomposes that into separate simple components; handing a figure-eight
+  // downstream produces a building with self-crossing walls.
+  let best: Polygon | null = null;
+  for (const part of unionPoly([cleaned])) {
+    const c = cleanPolygon(part, opts);
+    if (!c || !isSimple(c)) continue;
+    if (!best || area(c) > area(best)) best = c;
+  }
+  return best ? ensureCCW(best) : null;
 }
 
 /**

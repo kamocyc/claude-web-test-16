@@ -1,8 +1,8 @@
 import type { Polygon, Vec2 } from '../core/types.js';
 import type { BuildingParams } from '../core/params.js';
 import * as V from '../geom/vec2.js';
-import { area, clipSegmentToPolygon, edges as polyEdges } from '../geom/polygon.js';
-import { clipHalfPlane, type HalfPlane } from '../geom/halfplane.js';
+import { area, clipSegmentToPolygon, edges as polyEdges, isCCW } from '../geom/polygon.js';
+import { clipHalfPlane, splitPolygonByLine, type HalfPlane } from '../geom/halfplane.js';
 import { differencePoly, largest, multiArea } from '../geom/boolean.js';
 import {
   extentsIn,
@@ -55,6 +55,12 @@ const MAX_STEP_FLOORS = 2;
 const MAX_CUTS = 2;
 /** A second plane must bite this hard on its own to earn a cut. */
 const SECOND_CUT_FRACTION = 0.15;
+/**
+ * How much more plan than the walls a pitched roof's rectangles may cover.
+ * Past this the overhang is a cantilever rather than an eave, and the plan gets
+ * a mono-pitch instead — which needs no rectangles and is exact on any polygon.
+ */
+const MAX_ROOF_COVER = 1.3;
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -337,19 +343,89 @@ function refitParts(
     const part = footprint.parts[i]!;
     for (const piece of intersectPoly([world[i]!], [polygon])) {
       if (area(piece) < Math.max(4, localRectArea(part) * 0.12)) continue;
-      const r = extentsIn(piece, frame);
-      if (r.w < module * 2 || r.d < module * 2) continue;
-      // Reject a refit that badly describes the piece — an oblique lot cut.
-      if (area(piece) < localRectArea(r) * 0.6) continue;
-      rects.push(r);
+      rects.push(...describeAsRects(piece, frame, module));
     }
   }
-  if (rects.length > 0) return { rects, frame, cut: true };
+  const cover = (rs: LocalRect[]) =>
+    rs.length === 0 ? Infinity : rs.reduce((t, r) => t + localRectArea(r), 0) / area(polygon);
+  if (cover(rects) <= 1.25) return { rects, frame, cut: true };
 
-  // Everything was rejected: describe the actual plan by its own bounding box,
-  // in its own frame — which is why the frame travels with the rectangles.
+  // The building's own frame describes this plan badly — an oblique lot cut, so
+  // the walls do not run along the frame's axes at all. Try again in the plan's
+  // own minimum-area frame, which is why the frame travels with the rectangles.
   const obb = minAreaObb(polygon);
-  return { rects: [obb.rect], frame: obb.frame, cut: true };
+  const viaObb = describeAsRects(polygon, obb.frame, module);
+  if (cover(viaObb) < cover(rects)) {
+    if (cover(viaObb) <= MAX_ROOF_COVER) return { rects: viaObb, frame: obb.frame, cut: true };
+  } else if (cover(rects) <= MAX_ROOF_COVER) {
+    return { rects, frame, cut: true };
+  }
+
+  // No set of rectangles describes this plan without hanging a lot of roof over
+  // nothing. Report none: `buildRoof` reads that as "there is no span for a
+  // ridge to sit over" and lays a 片流れ on the plan itself, which is exact.
+  return { rects: [], frame, cut: true };
+}
+
+/**
+ * Describe a plan piece as frame-aligned rectangles for the roof to sit on.
+ *
+ * One bounding box is right for a piece that is nearly rectangular and badly
+ * wrong for one that is not. The parking space notches the plan into an L, and
+ * roofing that L's bounding box hangs four metres of roof over the car with no
+ * wall under it — the same floating-roof failure the stack massing exists to
+ * prevent. Cutting through the inside corner describes the L properly instead.
+ */
+function describeAsRects(piece: Polygon, frame: Frame, module: number, depth = 0): LocalRect[] {
+  const box = extentsIn(piece, frame);
+  const fits = box.w >= module * 2 && box.d >= module * 2;
+  const boxArea = localRectArea(box);
+  // Near-rectangular, or out of splits: take the box if it describes the piece
+  // at all, and otherwise nothing — an oblique lot cut is not a roof rectangle.
+  if (area(piece) >= boxArea * 0.85 || depth >= 2) {
+    return fits && area(piece) >= boxArea * 0.6 ? [box] : [];
+  }
+
+  const reflex = reflexVertex(piece);
+  if (!reflex) return fits && area(piece) >= boxArea * 0.6 ? [box] : [];
+
+  let best: LocalRect[] | null = null;
+  let bestWaste = Infinity;
+  for (const axis of [frame.xAxis, V.perp(frame.xAxis)]) {
+    const [left, right] = splitPolygonByLine(piece, reflex, axis);
+    const halves = [...left, ...right].filter((h) => area(h) >= 4);
+    if (halves.length < 2) continue;
+    const rects = halves.flatMap((h) => describeAsRects(h, frame, module, depth + 1));
+    if (rects.length === 0) continue;
+    const waste = rects.reduce((t, r) => t + localRectArea(r), 0) - area(piece);
+    if (waste < bestWaste) {
+      bestWaste = waste;
+      best = rects;
+    }
+  }
+  // A split that wastes more than the plain box is not worth the extra roof.
+  if (best && bestWaste < boxArea - area(piece)) return best;
+  return fits && area(piece) >= boxArea * 0.6 ? [box] : [];
+}
+
+/** The deepest inside corner of a plan, or null when it is convex. */
+function reflexVertex(poly: Polygon): Vec2 | null {
+  const n = poly.length;
+  if (n < 4) return null;
+  const sign = isCCW(poly) ? 1 : -1;
+  let worst: Vec2 | null = null;
+  let worstTurn = 0;
+  for (let i = 0; i < n; i++) {
+    const p = poly[(i - 1 + n) % n]!;
+    const v = poly[i]!;
+    const q = poly[(i + 1) % n]!;
+    const turn = V.cross(V.sub(v, p), V.sub(q, v)) * sign;
+    if (turn < worstTurn) {
+      worstTurn = turn;
+      worst = v;
+    }
+  }
+  return worst;
 }
 
 /**

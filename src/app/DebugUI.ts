@@ -110,7 +110,10 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fBuild.add(params.buildings, 'module', 0.5, 1.5, 0.01).name('モジュール(半間)');
   fBuild.add(params.buildings, 'frontSetback', 0, 4, 0.1).name('正面セットバック');
   fBuild.add(params.buildings, 'sideSetback', 0.2, 2, 0.1).name('側面セットバック');
+  fBuild.add(params.buildings, 'footprintFill', 0.5, 1.0, 0.01).name('建築可能領域の充填率');
   fBuild.add(params.buildings, 'houseCoverage', 0.2, 0.9, 0.02).name('建ぺい率(戸建)');
+  fBuild.add(params.buildings, 'carPadWidth', 2.2, 6, 0.1).name('駐車スペースの幅');
+  fBuild.add(params.buildings, 'carPadDepth', 3, 7, 0.1).name('駐車スペースの奥行');
   fBuild.add(params.buildings, 'houseFar', 0.4, 2.5, 0.05).name('容積率(戸建)');
   fBuild.add(params.buildings, 'mansionFar', 1, 6, 0.1).name('容積率(マンション)');
   fBuild.add(params.buildings, 'houseHeightLimit', 6, 20, 0.5).name('絶対高さ制限(低層)');

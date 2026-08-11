@@ -136,7 +136,12 @@ function layoutWall(
       const t = rng.chance(0.5) ? rng.range(0.2, 0.38) : rng.range(0.62, 0.8);
       place(Math.floor(t * slots), 1, 'door');
       if (spec.wantsCarPad && slots >= 5 && rng.chance(0.35)) {
-        place(rng.chance(0.5) ? 0 : slots - 3, 3, 'garage');
+        // Draw the coin either way so the seed stream does not shift, then use
+        // it only when there is no pad to aim at.
+        const coin = rng.chance(0.5);
+        const pad = spec.carPadAt;
+        const nearA = pad ? V.dist(wall.a, pad) < V.dist(wall.b, pad) : coin;
+        place(nearA ? 0 : slots - 3, 3, 'garage');
       }
     }
     // A balcony needs somewhere to project. On a tight side boundary there is
