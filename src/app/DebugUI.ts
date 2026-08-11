@@ -89,13 +89,15 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
 
   // --- Lots ----------------------------------------------------------------
   const fLots = gui.addFolder('敷地分割').close();
-  fLots.add(params.lots, 'minLotArea', 40, 160, 2).name('最小面積');
+  fLots.add(params.lots, 'minLotArea', 8, 160, 1).name('最小面積');
   fLots.add(params.lots, 'maxLotArea', 150, 900, 10).name('最大面積');
   fLots.add(params.lots, 'widthMean', 5, 24, 0.5).name('平均間口');
   fLots.add(params.lots, 'depthMean', 8, 30, 0.5).name('平均奥行');
   fLots.add(params.lots, 'cutAngleJitter', 0, 15, 0.5).name('境界の傾き(度)');
   fLots.add(params.lots, 'flagLotChance', 0, 1, 0.05).name('旗竿地の発生率');
-  fLots.add(params.lots, 'minFrontage', 2, 8, 0.1).name('最小間口(接道)');
+  fLots.add(params.lots, 'minFrontage', 0.5, 8, 0.1).name('最小間口(接道)');
+  // The real gate on a scrap: `minLotArea` alone never rejects one.
+  fLots.add(params.lots, 'minInscribedRadius', 0.5, 4, 0.1).name('最小内接円の半径');
 
   // --- Zoning --------------------------------------------------------------
   const fZone = gui.addFolder('用途配分').close();

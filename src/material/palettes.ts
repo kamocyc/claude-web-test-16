@@ -48,12 +48,19 @@ export const WALL_RC_TILE: readonly (readonly [number, number])[] = [
   [0xb0a596, 3],
 ] as const;
 
+/**
+ * Blues are held down on both roof palettes. `sampleRoofColor` rejects any
+ * candidate not clearly darker than the wall, and the navies are the darkest
+ * entries here — so they win far more often than their weight suggests, and the
+ * town came out reading blue from the air. The weights below are the corrected
+ * ones, not the intended proportions.
+ */
 export const ROOF_METAL: readonly (readonly [number, number])[] = [
   [0x8a4f3c, 5], // 赤錆茶 — the classic painted-steel red-brown
   [0x7d4a38, 4], // deeper red-brown
-  [0x3f4a70, 3.5], // 紺 navy
-  [0x4a5580, 2], // lighter navy
-  [0x7a6047, 2], // brown
+  [0x3f4a70, 1.6], // 紺 navy
+  [0x4a5580, 0.8], // lighter navy
+  [0x7a6047, 3], // brown
   [0x5c626a, 3.5], // 銀黒
   [0x5c7a72, 1.5], // 青緑
   [0x474d52, 2], // black
@@ -62,10 +69,10 @@ export const ROOF_METAL: readonly (readonly [number, number])[] = [
 export const ROOF_KAWARA: readonly (readonly [number, number])[] = [
   [0x9c4f33, 3.5], // 赤茶 — red-brown pantile
   [0xb06a44, 2.5], // orange
-  [0x3a4a70, 3.5], // 紺 navy
-  [0x4a6a8c, 2.5], // cobalt
+  [0x3a4a70, 1.8], // 紺 navy
+  [0x4a6a8c, 1.2], // cobalt
   [0x62786e, 1.5], // いぶし green
-  [0x565c63, 2.5], // いぶし銀
+  [0x565c63, 3], // いぶし銀
 ] as const;
 
 /** Entrance doors and apartment unit doors. */
@@ -146,22 +153,39 @@ export function sampleColor(
  * why the town came out roofed entirely in charcoal.
  *
  * Roofs being *darker* than the wall is the rule that actually holds.
+ *
+ * The cap then sat at 0.52 — just under 赤錆茶 (0.565) and its deeper sibling
+ * (0.552), the two highest-weighted entries on the metal palette. Both were
+ * therefore rejected on every draw and only ever reached a roof through the
+ * fallback, desaturated. The navies (0.42–0.44) passed, so they inherited the
+ * red-browns' weight on top of their own: 59% of pitched roofs came out blue
+ * against a palette that asked for 11%. The cap has to clear a real 赤錆茶.
  */
-const ROOF_MAX_SATURATION = 0.52;
+const ROOF_MAX_SATURATION = 0.64;
 
 /**
  * Pick a roof colour darker than the wall, without desaturating it.
  * Falls back to darkening the best candidate rather than looping forever.
+ *
+ * Rejection here is not free: the loop returns the first candidate that passes,
+ * so anything the test rejects hands its palette weight to whatever does pass.
+ * The margin was a flat `wall.v - 0.15`, which a taupe or mortar wall pushed
+ * below the red-browns — so on those walls only the navies and the greys could
+ * ever be drawn. The roof palettes are curated dark to begin with (nothing sits
+ * above v 0.55), so the wall comparison only needs to catch the jitter tail.
  */
+const ROOF_MAX_VALUE = 0.55;
+
 export function sampleRoofColor(
   palette: Palette,
   wall: Hsv,
   rng: Rng,
 ): { color: THREE.Color; hsv: Hsv } {
+  const limit = Math.max(ROOF_MAX_VALUE, wall.v - 0.08);
   let best: Hsv | null = null;
   for (let i = 0; i < 8; i++) {
     const cand = sampleColor(palette, rng, { h: 0.015, s: 0.05, v: 0.04 }).hsv;
-    if (cand.v < wall.v - 0.15 && cand.s <= ROOF_MAX_SATURATION) {
+    if (cand.v <= limit && cand.s <= ROOF_MAX_SATURATION) {
       return { color: fromHsv(cand), hsv: cand };
     }
     if (!best || cand.v < best.v) best = cand;

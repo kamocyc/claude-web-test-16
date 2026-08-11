@@ -32,22 +32,28 @@ interface ArchetypeDef {
   kind: 'house' | 'apart' | 'mansion';
   weight: number;
   floors: [number, number];
-  roof: RoofType[];
+  /**
+   * Weighted, not uniform. 片流れ is the single most over-used roof in
+   * procedural work — it is trivially exact on any polygon, so every fallback
+   * path reaches for it — and a street of mono-pitches reads as generated. The
+   * weights keep it a minority within each archetype that can carry one.
+   */
+  roof: [RoofType, number][];
   /** Era range this archetype plausibly belongs to. */
   era: [number, number];
 }
 
 const ARCHETYPES: ArchetypeDef[] = [
-  { id: 'houseTraditionalKawara', kind: 'house', weight: 0.9, floors: [1, 2], roof: ['hip', 'gable'], era: [0.0, 0.35] },
-  { id: 'houseGable2F', kind: 'house', weight: 3.0, floors: [2, 2], roof: ['gable'], era: [0.1, 0.9] },
-  { id: 'houseHip2F', kind: 'house', weight: 2.2, floors: [2, 2], roof: ['hip'], era: [0.05, 0.8] },
-  { id: 'houseShedModern', kind: 'house', weight: 1.5, floors: [2, 2], roof: ['shed'], era: [0.6, 1.0] },
-  { id: 'houseFlat3FUrban', kind: 'house', weight: 1.0, floors: [3, 3], roof: ['flat', 'shed'], era: [0.55, 1.0] },
-  { id: 'apartWood2F', kind: 'apart', weight: 2.2, floors: [2, 2], roof: ['gable', 'shed'], era: [0.0, 0.5] },
-  { id: 'apartSteel2F', kind: 'apart', weight: 1.8, floors: [2, 3], roof: ['shed', 'flat'], era: [0.35, 0.9] },
-  { id: 'apartRC3F', kind: 'apart', weight: 1.2, floors: [3, 4], roof: ['flat'], era: [0.45, 1.0] },
-  { id: 'mansionRC5F', kind: 'mansion', weight: 2.0, floors: [4, 6], roof: ['flat'], era: [0.2, 1.0] },
-  { id: 'mansionRC9F', kind: 'mansion', weight: 1.0, floors: [7, 10], roof: ['flat'], era: [0.35, 1.0] },
+  { id: 'houseTraditionalKawara', kind: 'house', weight: 0.9, floors: [1, 2], roof: [['hip', 3], ['gable', 2]], era: [0.0, 0.35] },
+  { id: 'houseGable2F', kind: 'house', weight: 3.0, floors: [2, 2], roof: [['gable', 1]], era: [0.1, 0.9] },
+  { id: 'houseHip2F', kind: 'house', weight: 2.2, floors: [2, 2], roof: [['hip', 1]], era: [0.05, 0.8] },
+  { id: 'houseShedModern', kind: 'house', weight: 0.9, floors: [2, 2], roof: [['shed', 1]], era: [0.6, 1.0] },
+  { id: 'houseFlat3FUrban', kind: 'house', weight: 1.0, floors: [3, 3], roof: [['flat', 3], ['shed', 1]], era: [0.55, 1.0] },
+  { id: 'apartWood2F', kind: 'apart', weight: 2.2, floors: [2, 2], roof: [['gable', 4], ['shed', 1]], era: [0.0, 0.5] },
+  { id: 'apartSteel2F', kind: 'apart', weight: 1.8, floors: [2, 3], roof: [['flat', 2], ['shed', 1]], era: [0.35, 0.9] },
+  { id: 'apartRC3F', kind: 'apart', weight: 1.2, floors: [3, 4], roof: [['flat', 1]], era: [0.45, 1.0] },
+  { id: 'mansionRC5F', kind: 'mansion', weight: 2.0, floors: [4, 6], roof: [['flat', 1]], era: [0.2, 1.0] },
+  { id: 'mansionRC9F', kind: 'mansion', weight: 1.0, floors: [7, 10], roof: [['flat', 1]], era: [0.35, 1.0] },
 ];
 
 /**
@@ -128,7 +134,7 @@ export function makeBuildingSpec(
   const wall = sampleColor(wallPalette, rng, { h: 0.02, s: 0.06, v: 0.05 });
 
   // Roof material follows era: 瓦 -> coloured steel -> dark standing seam -> flat.
-  const roofType: RoofType = rng.pick(arch.roof);
+  const roofType: RoofType = rng.weighted(arch.roof);
   const useKawara = roofType !== 'flat' && style.era < 0.3 && rng.chance(0.75);
   const roofFamily: BuildingSpec['roofFamily'] = useKawara ? 'roofKawara' : roofType === 'flat' ? 'concrete' : 'roofMetal';
   const roofPalette = useKawara ? ROOF_KAWARA : roofType === 'flat' ? CONCRETE : ROOF_METAL;

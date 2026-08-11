@@ -1,3 +1,4 @@
+import type * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PARAMS, cloneParams } from '../src/core/params.js';
 import { generateCity } from '../src/city/City.js';
@@ -195,10 +196,33 @@ describe('building geometry', () => {
     return (s2[Math.floor(s2.length * f)] ?? 0).toFixed(2);
   };
 
+  /**
+   * Roof colour is sampled from a weighted palette and then *filtered* for being
+   * darker than the wall, which the palette weights know nothing about. The
+   * navies are the darkest entries, so they survive that filter far more often
+   * than their weight implies. Bucketing the colours as built is the only way to
+   * see the proportion that actually reaches the street.
+   */
+  const roofHue = (c: THREE.Color): string => {
+    // HSV saturation, not HSL: the palettes are written in HSV, and 銀黒 and
+    // ガルバ black are blue-*hued* greys. An HSL cut called both of them navy,
+    // which put the navy share at 43% when the palette asked for 11% — the
+    // measurement, not the generator, was wrong.
+    const v = Math.max(c.r, c.g, c.b);
+    const s = v === 0 ? 0 : (v - Math.min(c.r, c.g, c.b)) / v;
+    if (s < 0.3) return v < 0.45 ? 'charcoal' : 'grey';
+    const { h } = c.getHSL({ h: 0, s: 0, l: 0 });
+    if (h > 0.52 && h < 0.75) return 'navy';
+    if (h < 0.09 || h > 0.94) return 'redBrown';
+    if (h < 0.14) return 'brown';
+    return 'green';
+  };
+
   it('reports the distribution', () => {
     const kinds: Record<string, number> = {};
     const floors: Record<number, number> = {};
     const roofs: Record<string, number> = {};
+    const roofColors: Record<string, number> = {};
     const archetypes: Record<string, number> = {};
     let clippedCount = 0;
     let totalHeight = 0;
@@ -215,6 +239,10 @@ describe('building geometry', () => {
       kinds[b.spec.kind] = (kinds[b.spec.kind] ?? 0) + 1;
       floors[b.mass.floors.length] = (floors[b.mass.floors.length] ?? 0) + 1;
       roofs[b.spec.roofType] = (roofs[b.spec.roofType] ?? 0) + 1;
+      if (b.spec.roofType !== 'flat') {
+        const hue = roofHue(b.spec.roofColor);
+        roofColors[hue] = (roofColors[hue] ?? 0) + 1;
+      }
       archetypes[b.spec.archetype] = (archetypes[b.spec.archetype] ?? 0) + 1;
       coverages.push(b.footprint.area / b.lot.area);
       stackCounts[b.mass.stacks.length] = (stackCounts[b.mass.stacks.length] ?? 0) + 1;
@@ -232,6 +260,7 @@ describe('building geometry', () => {
         `kinds:       ${JSON.stringify(kinds)}`,
         `floors:      ${JSON.stringify(floors)}`,
         `roofs:       ${JSON.stringify(roofs)}`,
+        `roof colour: ${JSON.stringify(roofColors)} (pitched roofs only)`,
         `archetypes:  ${JSON.stringify(archetypes)}`,
         `lot-clipped: ${clippedCount} (${((clippedCount / built.length) * 100).toFixed(0)}% of footprints cut by the lot shape)`,
         `mean height: ${(totalHeight / built.length).toFixed(1)} m`,

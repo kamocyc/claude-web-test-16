@@ -16,6 +16,7 @@ import { differencePoly, intersectPoly, largest, multiArea, unionPoly } from '..
 import { cleanPolygon } from '../geom/simplify.js';
 import { offsetInward, offsetInwardVariable } from '../geom/offset.js';
 import { bestInscribedRect } from '../geom/inscribedRect.js';
+import { CONCRETE, sampleColor } from '../material/palettes.js';
 import {
   extentsIn,
   localRectPolygon,
@@ -409,7 +410,7 @@ export function fitFootprint(
     if (outline) {
       const outArea = area(outline);
       if (outArea >= params.minFloorArea) {
-        const cleaned = cleanFootprint(outline, params);
+        const cleaned = cleanFootprintWithin(outline, buildable, params);
         if (cleaned && area(cleaned) >= params.minFloorArea) {
           const clippedFraction = composedArea > 0 ? 1 - outArea / composedArea : 0;
           return {
@@ -480,7 +481,7 @@ function conformFootprint(
   );
   const sized = shrinkToArea(chamfered, target, lot.faceDir);
 
-  const cleaned = cleanFootprint(sized, params);
+  const cleaned = cleanFootprintWithin(sized, buildable, params);
   if (!cleaned || area(cleaned) < params.minFloorArea) return null;
   // A long enough ribbon clears the minimum floor area while being a metre
   // wide — a wall, not a building. The rectangle path can't produce one because
@@ -491,11 +492,24 @@ function conformFootprint(
   // This outline was not composed from rectangles, so there is no span for a
   // ridge to sit over. 片流れ is exact on any polygon — as is 陸屋根 — and both
   // are what actually gets built on a narrow irregular site.
+  //
+  // 陸屋根 takes the majority. Sending every irregular parcel to a mono-pitch
+  // made 片流れ a quarter of the whole town, and irregular parcels cluster —
+  // they are the leftovers of one awkward block — so the ones that did land
+  // together all leaned the same way.
   if (spec.roofType === 'gable' || spec.roofType === 'hip') {
-    spec.roofType = 'shed';
-    // A 瓦 pitch of 0.45–0.6 run one way across a 10 m wedge is a 5 m rise.
-    spec.roofPitch = Math.min(spec.roofPitch, 0.28);
-    if (spec.roofFamily === 'roofKawara') spec.roofFamily = 'roofMetal';
+    if (rng.chance(0.62)) {
+      spec.roofType = 'flat';
+      // The roof family drives which texture buffer the geometry lands in, so a
+      // 瓦 family here would tile the parapet coping with pantiles.
+      spec.roofFamily = 'concrete';
+      spec.roofColor = sampleColor(CONCRETE, rng, { h: 0.01, s: 0.03, v: 0.05 }).color;
+    } else {
+      spec.roofType = 'shed';
+      // A 瓦 pitch of 0.45–0.6 run one way across a 10 m wedge is a 5 m rise.
+      spec.roofPitch = Math.min(spec.roofPitch, 0.28);
+      if (spec.roofFamily === 'roofKawara') spec.roofFamily = 'roofMetal';
+    }
   }
 
   return {
@@ -629,6 +643,35 @@ function searchInset(
     }
   }
   return out;
+}
+
+/**
+ * Clean, then put back anything the cleaning pushed outside the envelope.
+ *
+ * Simplification is not area-preserving. Merging a staircase of 10 cm clip
+ * edges into one wall moves that wall *outward*, and on a heavily clipped
+ * footprint that left 5% of the plan standing over its own setback. Clipping
+ * back is exact, but it recreates short edges, so this alternates the two: each
+ * round starts from a shape with fewer stairs to bulge, and the excess collapses
+ * within two or three. A shape that will not settle is returned clipped and
+ * unsimplified — correct geometry is worth more than tidy walls.
+ */
+function cleanFootprintWithin(
+  poly: Polygon,
+  within: Polygon,
+  params: BuildingParams,
+): Polygon | null {
+  let current = poly;
+  for (let i = 0; i < 3; i++) {
+    const cleaned = cleanFootprint(current, params);
+    if (!cleaned) return null;
+    const inside = multiArea(intersectPoly([cleaned], [within]));
+    if (area(cleaned) - inside <= area(cleaned) * 0.005) return cleaned;
+    const clipped = largest(intersectPoly([cleaned], [within]));
+    if (!clipped || area(clipped) < params.minFloorArea) return null;
+    current = clipped;
+  }
+  return isSimple(current) ? ensureCCW(current) : null;
 }
 
 /**

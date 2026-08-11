@@ -61,7 +61,13 @@ export interface LotParams {
   /** Lot width and depth are larger along wide roads. */
   widthMeanMajor: number;
   depthMeanMajor: number;
-  /** Minimum street frontage, metres. Japan's 接道義務 is 2 m. */
+  /**
+   * Minimum street frontage, metres. Japan's 接道義務 is 2 m, but this doubles
+   * as the acceptance test for leftover scraps, and a suburb is full of parcels
+   * that never had to satisfy it — 未接道 slivers between two developments, the
+   * corner a road widening left behind. Kept below the legal figure so those
+   * survive as ground rather than vanishing.
+   */
   minFrontage: number;
   /** Mean and spread of lot depth. */
   depthMean: number;
@@ -84,7 +90,12 @@ export interface LotParams {
   /** Width of a flag lot's pole (竿). */
   poleWidth: number;
   flagLotChance: number;
-  /** Parcels whose largest inscribed circle is smaller than this are discarded. */
+  /**
+   * Parcels whose largest inscribed circle is smaller than this are discarded.
+   * This, not `minLotArea`, is what actually rejects a scrap: a 3 m × 4 m corner
+   * is 12 m² but only holds a 1.5 m circle. Lowering `minLotArea` without
+   * lowering this changes nothing.
+   */
   minInscribedRadius: number;
   /** Gutter allowance added to each road's half width. */
   gutterWidth: number;
@@ -235,12 +246,12 @@ export const DEFAULT_PARAMS: CityParams = {
     minEdgeLength: 7,
   },
   lots: {
-    minLotArea: 52,
+    minLotArea: 10,
     maxLotArea: 340,
     maxLotAreaMajor: 1500,
     widthMeanMajor: 21,
     depthMeanMajor: 24,
-    minFrontage: 4.0,
+    minFrontage: 1.0,
     depthMean: 13.5,
     depthSigma: 2.5,
     depthMin: 9.5,
@@ -255,7 +266,7 @@ export const DEFAULT_PARAMS: CityParams = {
     privateLaneWidth: 4,
     poleWidth: 2.6,
     flagLotChance: 0.55,
-    minInscribedRadius: 1.8,
+    minInscribedRadius: 0.9,
     gutterWidth: 0.5,
     maxRecursionDepth: 2,
   },

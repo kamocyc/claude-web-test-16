@@ -639,7 +639,7 @@ function computeFrontages(poly: Polygon, fronts: FrontRef[], cfg: LotParams): Lo
   const out: LotFrontage[] = [];
 
   for (const e of polyEdges(poly)) {
-    if (e.len < cfg.minFrontage * 0.5) continue;
+    if (e.len < cfg.minFrontage) continue;
     const mid = V.lerp(e.a, e.b, 0.5);
     let best: { f: FrontRef; d: number } | null = null;
     for (const f of fronts) {
@@ -666,7 +666,7 @@ function computeFrontages(poly: Polygon, fronts: FrontRef[], cfg: LotParams): Lo
 
   // Merge collinear runs so a lot with a cleaned-up boundary still reports one
   // long frontage rather than several short ones.
-  return out.filter((f) => f.len >= cfg.minFrontage * 0.5);
+  return out.filter((f) => f.len >= cfg.minFrontage);
 }
 
 export const clampNumber = clamp;

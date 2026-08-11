@@ -67,14 +67,24 @@ describe('lot subdivision invariants', () => {
     }
   });
 
-  it('every lot has road frontage of at least 2 m (接道義務)', () => {
+  /**
+   * 接道義務 is 2 m. It is no longer a hard invariant here: `minFrontage` sits
+   * below the legal figure on purpose, so the scrap a road widening left behind
+   * survives as ground instead of becoming a hole in the city. Real suburbs
+   * carry the same thing — 未接道 parcels, usually with an old house still on
+   * them — but they are the exception, so this asserts the proportion.
+   */
+  it('every lot fronts a street, and nearly all meet 接道義務', () => {
     for (const seed of seeds) {
-      const { lots } = buildLots(seed);
+      const { params, lots } = buildLots(seed);
+      let legal = 0;
       for (const lot of lots) {
         expect(lot.frontages.length, `lot ${lot.id} has no frontage`).toBeGreaterThan(0);
         const best = Math.max(...lot.frontages.map((f) => f.len));
-        expect(best, `lot ${lot.id} frontage length`).toBeGreaterThanOrEqual(2.0);
+        expect(best, `lot ${lot.id} frontage length`).toBeGreaterThanOrEqual(params.lots.minFrontage);
+        if (best >= 2.0) legal++;
       }
+      expect(legal / lots.length, `seed ${seed}`).toBeGreaterThan(0.95);
     }
   });
 
