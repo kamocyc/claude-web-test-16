@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>日本の郊外 プロシージャル生成</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0e1114; }
+      #app { position: fixed; inset: 0; }
+      canvas { display: block; }
+
+      #hud {
+        position: fixed; left: 12px; bottom: 12px; z-index: 10;
+        font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #cfd6dd; background: rgba(14, 17, 20, 0.66);
+        border: 1px solid rgba(255,255,255,0.10); border-radius: 6px;
+        padding: 8px 10px; white-space: pre; pointer-events: none;
+        backdrop-filter: blur(6px);
+      }
+      #hint {
+        position: fixed; left: 12px; top: 12px; z-index: 10;
+        font: 12px/1.6 ui-sans-serif, system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+        color: #aab4bd; background: rgba(14, 17, 20, 0.66);
+        border: 1px solid rgba(255,255,255,0.10); border-radius: 6px;
+        padding: 8px 10px; pointer-events: none; backdrop-filter: blur(6px);
+      }
+      #loading {
+        position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
+        font: 14px/1.6 ui-sans-serif, system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+        color: #d7dee5; background: #0e1114; transition: opacity .35s ease;
+      }
+      #loading.hidden { opacity: 0; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hint">
+      マウス左ドラッグ: 回転 / ホイール: ズーム / 右ドラッグ: パン<br />
+      <b>W</b> キー: 歩行モード切替（歩行中は WASD + Shift、Esc で解除）
+    </div>
+    <div id="hud">generating…</div>
+    <div id="loading">街を生成しています…</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
