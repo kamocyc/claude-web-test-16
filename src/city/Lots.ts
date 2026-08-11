@@ -6,6 +6,7 @@ import {
   area,
   centroid,
   edges as polyEdges,
+  isSimple,
   maxInscribedCircle,
   type Edge,
 } from '../geom/polygon.js';
@@ -71,6 +72,15 @@ interface Parcel {
   polygon: Polygon;
   isFlagLot: boolean;
   poleCorridor: Polygon | null;
+  /**
+   * Frontage references *in addition to* the block's street references.
+   * Parcels behind a private lane front the lane, not the street; validating
+   * them against street refs alone discarded every one of them — the lane was
+   * dug, registered and paved while the lots it existed to serve were thrown
+   * away. The block refs still apply too, which is what gives a corner lot its
+   * second frontage.
+   */
+  fronts: FrontRef[];
 }
 
 /** A frontage-bearing edge carried through the block-interior clipping. */
@@ -96,22 +106,33 @@ export function subdivideBlock(
   const rng = makeRng(subSeed(block.seed, 'lots'));
 
   // --- Stage A: road right-of-way -----------------------------------------
-  // Road widths differ per edge, so this is an intersection of half-planes
-  // rather than a uniform offset. Doing it as an offset would be both slower
-  // and wrong.
+  // Subtract each road's actual footprint rather than clipping by a half-plane.
+  //
+  // A half-plane is infinite, and a block bounded by a *curved* road has ten or
+  // more short edges along that curve. On the concave side each of those planes
+  // slices right across the block, and their intersection collapses far more
+  // than the road's own width — eleven blocks, some of them 2,000–4,000 m²,
+  // were being emptied outright and left as bare ground.
+  //
+  // Subtracting strips is also what makes the lots agree with the road surface
+  // drawn in `props/Ground.ts`, since both are now the same rectangle.
   const fronts: FrontRef[] = [];
-  let interior: Polygon[] = [block.polygon];
+  const roadStrips: Polygon[] = [];
 
   for (const e of block.edges) {
     if (e.cls === null) continue;
     const inset = e.roadWidth / 2 + cfg.gutterWidth;
-    const hp: HalfPlane = { origin: V.addScaled(e.a, e.normal, inset), normal: e.normal };
-    const next: Polygon[] = [];
-    for (const p of interior) next.push(...clipHalfPlane(p, hp));
-    if (next.length === 0) return [];
-    interior = next;
+    // Overshoot the ends so strips meet cleanly at block corners.
+    const a = V.addScaled(e.a, e.dir, -inset);
+    const b = V.addScaled(e.b, e.dir, inset);
+    roadStrips.push([
+      V.addScaled(a, e.normal, -inset),
+      V.addScaled(b, e.normal, -inset),
+      V.addScaled(b, e.normal, inset),
+      V.addScaled(a, e.normal, inset),
+    ]);
     fronts.push({
-      a: hp.origin,
+      a: V.addScaled(e.a, e.normal, inset),
       b: V.addScaled(e.b, e.normal, inset),
       dir: e.dir,
       inward: e.normal,
@@ -121,6 +142,7 @@ export function subdivideBlock(
   }
 
   if (fronts.length === 0) return [];
+  const interior = differencePoly([block.polygon], roadStrips);
   const inner = largest(interior);
   if (!inner || area(inner) < cfg.minLotArea) return [];
 
@@ -234,7 +256,7 @@ function subdivideInterior(
     for (const sp of stripParcels) {
       for (const piece of differencePoly([sp.polygon], carveOuts)) {
         if (area(piece) >= cfg.minLotArea * 0.5) {
-          parcels.push({ polygon: piece, isFlagLot: false, poleCorridor: null });
+          parcels.push({ ...sp, polygon: piece });
         }
       }
     }
@@ -246,7 +268,13 @@ function subdivideInterior(
 /** Cut a frontage strip into individual lots along the street. */
 function sliceStripIntoLots(strip: Polygon, front: FrontRef, cfg: LotParams, rng: Rng): Parcel[] {
   const a = area(strip);
-  if (a < cfg.minLotArea) return [{ polygon: strip, isFlagLot: false, poleCorridor: null }];
+  const tag = (polygon: Polygon): Parcel => ({
+    polygon,
+    isFlagLot: false,
+    poleCorridor: null,
+    fronts: [front],
+  });
+  if (a < cfg.minLotArea) return [tag(strip)];
 
   // The extent of the strip measured along the street direction.
   let minT = Infinity;
@@ -258,7 +286,7 @@ function sliceStripIntoLots(strip: Polygon, front: FrontRef, cfg: LotParams, rng
   }
   const span = maxT - minT;
   if (span < cfg.minFrontage * 1.6) {
-    return [{ polygon: strip, isFlagLot: false, poleCorridor: null }];
+    return [tag(strip)];
   }
 
   const isMajor = front.cls === 'arterial' || front.cls === 'collector';
@@ -269,7 +297,7 @@ function sliceStripIntoLots(strip: Polygon, front: FrontRef, cfg: LotParams, rng
     isMajor ? cfg.widthMeanMajor + 12 : cfg.widthMax,
   );
   const k = Math.max(1, Math.round(span / targetWidth));
-  if (k === 1) return [{ polygon: strip, isFlagLot: false, poleCorridor: null }];
+  if (k === 1) return [tag(strip)];
 
   // Jittered widths that still sum to the span and respect the minimum frontage.
   const widths: number[] = [];
@@ -295,13 +323,13 @@ function sliceStripIntoLots(strip: Polygon, front: FrontRef, cfg: LotParams, rng
       // `cutDir` pointing into the block, `left` is the side already passed
       // along the street — that is the finished lot; `right` carries on.
       const [done, remaining] = splitPolygonByLine(piece, origin, cutDir);
-      for (const p of done) out.push({ polygon: p, isFlagLot: false, poleCorridor: null });
+      for (const p of done) out.push(tag(p));
       nextRest.push(...remaining);
     }
     rest = nextRest;
     if (rest.length === 0) break;
   }
-  for (const p of rest) out.push({ polygon: p, isFlagLot: false, poleCorridor: null });
+  for (const p of rest) out.push(tag(p));
   return out;
 }
 
@@ -348,7 +376,25 @@ function tryPrivateLane(
     if (!lane) continue;
     // The lane must actually reach the core, or it is just a driveway.
     if (multiArea(intersectPoly([lane], [core])) < cfg.privateLaneWidth * 4) continue;
-    return { from: entry, to: end, corridor: lane, dir };
+
+    // Report the endpoints of the *clipped* corridor. `end` deliberately
+    // overshoots the core centroid by 6 m so the corridor is sure to reach it,
+    // and the corridor polygon is then clipped to the block — but the endpoints
+    // were being reported unclipped, so the rendered road ran that far past the
+    // land it had actually taken.
+    let tMin = Infinity;
+    let tMax = -Infinity;
+    for (const p of lane) {
+      const t = V.dot(V.sub(p, entry), dir);
+      if (t < tMin) tMin = t;
+      if (t > tMax) tMax = t;
+    }
+    return {
+      from: V.addScaled(entry, dir, tMin),
+      to: V.addScaled(entry, dir, tMax),
+      corridor: lane,
+      dir,
+    };
   }
   return null;
 }
@@ -434,7 +480,7 @@ function makeFlagLots(
     if (!cleaned) continue;
 
     claimedPoles.push(corridor);
-    out.push({ polygon: cleaned, isFlagLot: true, poleCorridor: corridor });
+    out.push({ polygon: cleaned, isFlagLot: true, poleCorridor: corridor, fronts });
   }
   return out;
 }
@@ -504,7 +550,7 @@ function longestExtentAxis(poly: Polygon): Vec2 {
 function finaliseLots(
   parcels: Parcel[],
   block: Block,
-  fronts: FrontRef[],
+  blockFronts: FrontRef[],
   cfg: LotParams,
   idOffset: number,
 ): Lot[] {
@@ -513,12 +559,27 @@ function finaliseLots(
   const accept = (p: Parcel, depth = 0): void => {
     const cleaned = cleanPolygon(p.polygon, { tolerance: 0.04, minEdge: 0.2, minArea: 1 });
     if (!cleaned) return;
+
+    // Subtracting two road strips that meet at a block corner can pinch the
+    // remainder into a ring that touches itself. A union decomposes it into
+    // separate simple components; handing a figure-eight downstream produces a
+    // building with self-crossing walls.
+    if (!isSimple(cleaned)) {
+      if (depth >= 3) return;
+      for (const piece of unionPoly([cleaned])) {
+        if (isSimple(piece)) accept({ ...p, polygon: piece }, depth + 1);
+      }
+      return;
+    }
+
     const a = area(cleaned);
     if (a < cfg.minLotArea) return;
     // Unbuildable slivers: long and thin, nothing fits.
     if (maxInscribedCircle(cleaned, 0.4).radius < cfg.minInscribedRadius) return;
 
-    const frontages = computeFrontages(cleaned, fronts, cfg);
+    // The block's street refs plus whatever the parcel itself fronts (a private
+    // lane, typically) — see the note on `Parcel.fronts`.
+    const frontages = computeFrontages(cleaned, [...blockFronts, ...p.fronts], cfg);
     // 接道義務: without frontage the parcel cannot exist as a lot.
     if (frontages.length === 0) return;
     frontages.sort((x, y) => classRank(y.cls) - classRank(x.cls) || y.len - x.len);
@@ -534,7 +595,7 @@ function finaliseLots(
     // half-block lot.
     if (a > cap && !p.isFlagLot && depth < 3) {
       for (const piece of resliceOversized(cleaned, cap, cfg)) {
-        accept({ polygon: piece, isFlagLot: false, poleCorridor: null }, depth + 1);
+        accept({ ...p, polygon: piece }, depth + 1);
       }
       return;
     }

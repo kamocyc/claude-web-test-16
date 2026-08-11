@@ -48,16 +48,23 @@ export function buildGround(city: City, params: CityParams, materials: MaterialL
   const asphalt = new GeometryBuffer();
   const kerb = new GeometryBuffer();
 
-  const addRibbon = (a: Vec2, b: Vec2, width: number) => {
+  /**
+   * `extendEnds` closes the gap at a junction by running the ribbon a little
+   * past its node. That is right for the road graph, where two ribbons meet at a
+   * shared node — and wrong for a private lane, whose ends are the exact extent
+   * of the land taken from the lots. Extending those pushed asphalt out over
+   * land a building was already standing on.
+   */
+  const addRibbon = (a: Vec2, b: Vec2, width: number, extendEnds: boolean) => {
     const d = V.sub(b, a);
     const l = V.len(d);
     if (l < 0.2) return;
     const dir = V.scale(d, 1 / l);
     const n = V.perp(dir);
     const half = width / 2;
-    // Extend slightly past each end so junctions close up.
-    const a2 = V.addScaled(a, dir, -half * 0.9);
-    const b2 = V.addScaled(b, dir, half * 0.9);
+    const over = extendEnds ? half * 0.9 : 0;
+    const a2 = V.addScaled(a, dir, -over);
+    const b2 = V.addScaled(b, dir, over);
 
     const quad = (inner: number, outer: number, y: number, buf: GeometryBuffer): void => {
       const p: Polygon = [
@@ -69,20 +76,24 @@ export function buildGround(city: City, params: CityParams, materials: MaterialL
       buf.pushCap(p, y, true);
     };
 
+    // 側溝: a pale concrete gutter strip along each edge. It sits *inside* the
+    // nominal width — the lot subdivider already sets buildings back by
+    // `roadWidth / 2 + gutterWidth`, so a gutter drawn outside `half` would lie
+    // on private land for the whole length of the road.
+    const gutter = Math.min(0.35, half * 0.16);
     asphalt.setColor({ r: 0.155, g: 0.157, b: 0.168 });
-    quad(-half, half, 0.02, asphalt);
+    quad(-half + gutter, half - gutter, 0.02, asphalt);
 
-    // 側溝: a pale concrete gutter strip along each edge.
     kerb.setColor({ r: 0.72, g: 0.71, b: 0.68 });
-    quad(half, half + 0.35, 0.035, kerb);
-    quad(-half - 0.35, -half, 0.035, kerb);
+    quad(half - gutter, half, 0.035, kerb);
+    quad(-half, -half + gutter, 0.035, kerb);
   };
 
   for (const e of city.roads.edges) {
-    addRibbon(city.roads.graph.node(e.a).p, city.roads.graph.node(e.b).p, e.width);
+    addRibbon(city.roads.graph.node(e.a).p, city.roads.graph.node(e.b).p, e.width, true);
   }
   for (const lane of city.roads.privateLanes) {
-    addRibbon(lane.a, lane.b, lane.width);
+    addRibbon(lane.a, lane.b, lane.width, false);
   }
 
   for (const [buf, family] of [

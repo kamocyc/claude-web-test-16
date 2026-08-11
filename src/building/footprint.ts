@@ -7,9 +7,11 @@ import { area, centroid, edges as polyEdges, ensureCCW } from '../geom/polygon.j
 import { clipHalfPlane } from '../geom/halfplane.js';
 import { differencePoly, intersectPoly, largest, multiArea, unionPoly } from '../geom/boolean.js';
 import { cleanPolygon } from '../geom/simplify.js';
-import { largestInscribedRect } from '../geom/inscribedRect.js';
+import { bestInscribedRect } from '../geom/inscribedRect.js';
 import {
+  extentsIn,
   localRectPolygon,
+  minAreaObb,
   polyToWorld,
   toLocal,
   type Frame,
@@ -232,19 +234,54 @@ export function fitFootprint(
     buildableArea * rng.range(0.72, 0.95),
   );
 
-  // 3. Seed rectangle: largest inscribed axis-aligned rect in the local frame.
-  const inscribed = largestInscribedRect(buildable, frameRotated, 0.25);
-  if (!inscribed) return null;
+  // 3. Seed rectangle: the largest inscribed axis-aligned rect, searched over
+  //    several orientations. Searching only the street-aligned frame lost
+  //    20–40% of the area on any lot whose sides are not square to the street —
+  //    which, given the cut-angle jitter and the warped grid, is most of them.
+  //    The bonus keeps the building facing the street rather than merely
+  //    filling the most area.
+  const candidateFrames: Frame[] = [frameRotated];
+  const lotObb = minAreaObb(buildable);
+  for (const axis of [lotObb.frame.xAxis, V.perp(lotObb.frame.xAxis)]) {
+    // Only consider a lot-aligned frame if it still roughly faces the street.
+    if (Math.abs(V.dot(axis, frameRotated.xAxis)) > 0.55) {
+      candidateFrames.push({ origin: frame.origin, xAxis: axis });
+    }
+  }
+  const best = bestInscribedRect(
+    buildable,
+    candidateFrames,
+    (r, i) => r.w * r.d * (i === 0 ? 1.08 : 1),
+    0.2,
+  );
+  if (!best) return null;
 
-  let candidateRect = inscribed.rect;
-  // Trim the seed rectangle toward the target area, keeping the street-facing
-  // edge fixed so the setback stays constant.
-  if (inscribed.area > targetArea) {
-    const k = Math.sqrt(targetArea / inscribed.area);
+  const workFrame = best.frame;
+  let candidateRect = best.rect;
+  const inscribedArea = candidateRect.w * candidateRect.d;
+
+  if (inscribedArea > targetArea) {
+    // Trim toward the target, keeping the street-facing edge fixed so the
+    // setback stays constant.
+    const k = Math.sqrt(targetArea / inscribedArea);
     const newW = Math.max(params.module * 3, candidateRect.w * Math.max(k, 0.55));
     const newD = Math.max(params.module * 3, candidateRect.d * Math.max(k, 0.55));
     const frontEdge = candidateRect.cy - candidateRect.d / 2;
     candidateRect = { cx: candidateRect.cx, cy: frontEdge + newD / 2, w: newW, d: newD };
+  } else {
+    // `targetArea` used to be a ceiling only, so a building never grew to meet
+    // it and coverage came out at roughly half the nominal 建ぺい率. Grow the
+    // rect outward instead: the composed mass is clipped to the buildable area
+    // anyway, so a rectangle that overhangs simply becomes a near-rectangular
+    // mass cut by the lot — which is exactly the intended shape.
+    const ext = extentsIn(buildable, workFrame);
+    const grow = Math.sqrt(targetArea / Math.max(1, inscribedArea));
+    candidateRect = {
+      cx: candidateRect.cx,
+      cy: candidateRect.cy,
+      w: Math.min(ext.w, candidateRect.w * grow),
+      d: Math.min(ext.d, candidateRect.d * grow),
+    };
   }
 
   // 4–6. Compose, clip, and shrink until it fits.
@@ -258,7 +295,7 @@ export function fitFootprint(
       d: candidateRect.d * scale,
     };
     const parts = composeShape(shape, rect, params.module, makeRng(subSeed(lot.seed, 'shape', attempt)));
-    const worldParts = parts.map((r) => polyToWorld(localRectPolygon(r), frameRotated));
+    const worldParts = parts.map((r) => polyToWorld(localRectPolygon(r), workFrame));
     const composed = unionPoly(worldParts);
     if (composed.length === 0) break;
     const composedArea = multiArea(composed);
@@ -275,7 +312,7 @@ export function fitFootprint(
           return {
             outline: cleaned,
             parts,
-            frame: frameRotated,
+            frame: workFrame,
             clipped: clippedFraction > 0.005,
             clippedFraction,
             walls: classifyWalls(cleaned, lot, spec),

@@ -75,6 +75,11 @@ describe('building geometry', () => {
     }
   });
 
+  const pct = (xs: number[], f: number) => {
+    const s2 = xs.slice().sort((a, b) => a - b);
+    return (s2[Math.floor(s2.length * f)] ?? 0).toFixed(2);
+  };
+
   it('reports the distribution', () => {
     const kinds: Record<string, number> = {};
     const floors: Record<number, number> = {};
@@ -84,6 +89,7 @@ describe('building geometry', () => {
     let totalHeight = 0;
     let wantsPad = 0;
     let hasPad = 0;
+    const coverages: number[] = [];
     for (const b of built) {
       if (b.spec.wantsCarPad) wantsPad++;
       if (b.envelope.carPad) hasPad++;
@@ -91,6 +97,7 @@ describe('building geometry', () => {
       floors[b.mass.floors.length] = (floors[b.mass.floors.length] ?? 0) + 1;
       roofs[b.spec.roofType] = (roofs[b.spec.roofType] ?? 0) + 1;
       archetypes[b.spec.archetype] = (archetypes[b.spec.archetype] ?? 0) + 1;
+      coverages.push(b.footprint.area / b.lot.area);
       if (b.footprint.clippedFraction > 0.02) clippedCount++;
       totalHeight += b.mass.height;
     }
@@ -105,6 +112,7 @@ describe('building geometry', () => {
         `lot-clipped: ${clippedCount} (${((clippedCount / built.length) * 100).toFixed(0)}% of footprints cut by the lot shape)`,
         `mean height: ${(totalHeight / built.length).toFixed(1)} m`,
         `car pads:    ${hasPad} built / ${wantsPad} wanted`,
+        `coverage:    p10=${pct(coverages, 0.1)} p50=${pct(coverages, 0.5)} p90=${pct(coverages, 0.9)} (建ぺい率 as built)`,
         '',
       ].join('\n'),
     );

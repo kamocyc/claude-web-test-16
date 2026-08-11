@@ -303,3 +303,41 @@ export function resample(poly: Polygon, spacing: number): Polygon {
 export function samplePoints(poly: Polygon, spacing: number): Vec2[] {
   return resample(poly, spacing);
 }
+
+/**
+ * Trim a segment to the part of it that lies inside the polygon, returning the
+ * longest contiguous run, or null when none of it is inside.
+ *
+ * Roads registered from a construction line have to be clipped to the block they
+ * belong to. Skipping this is what let generated lanes run out across the
+ * neighbouring blocks.
+ */
+export function clipSegmentToPolygon(
+  poly: Polygon,
+  a: Vec2,
+  b: Vec2,
+): [Vec2, Vec2] | null {
+  const d = V.sub(b, a);
+  const total = V.len(d);
+  if (total < 1e-6) return null;
+
+  // Every crossing parameter along the segment, plus the two endpoints.
+  const ts: number[] = [0, 1];
+  for (let i = 0, n = poly.length; i < n; i++) {
+    const x = V.segmentIntersection(a, b, poly[i]!, poly[(i + 1) % n]!, 1e-9);
+    if (x) ts.push(x.ta);
+  }
+  ts.sort((p, q) => p - q);
+
+  let best: [number, number] | null = null;
+  for (let i = 0; i + 1 < ts.length; i++) {
+    const t0 = ts[i]!;
+    const t1 = ts[i + 1]!;
+    if (t1 - t0 < 1e-6) continue;
+    if (!contains(poly, V.addScaled(a, d, (t0 + t1) / 2))) continue;
+    if (!best || t1 - t0 > best[1] - best[0]) best = [t0, t1];
+  }
+  if (!best) return null;
+  if ((best[1] - best[0]) * total < 1e-3) return null;
+  return [V.addScaled(a, d, best[0]), V.addScaled(a, d, best[1])];
+}
