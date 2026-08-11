@@ -128,6 +128,20 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fBuild.add(params.buildings, 'orientationJitter', 0, 8, 0.1).name('向きのばらつき(度)');
   fBuild.add(params.buildings, 'bayAlignChance', 0, 1, 0.05).name('上下階の開口を揃える');
 
+  // The single most visible setting in the generator: what the town reads as
+  // from the air. Parts, not percentages — the sampler renormalises.
+  const fRoofHue = fBuild.addFolder('屋根の色の配合').close();
+  const HUES: [keyof typeof params.buildings.roofHueMix, string][] = [
+    ['redBrown', '赤錆茶・赤茶系'],
+    ['navy', '紺・コバルト系'],
+    ['grey', '銀黒・ガルバ黒系'],
+    ['brown', '茶系'],
+    ['green', '青緑・いぶし緑系'],
+  ];
+  for (const [key, label] of HUES) {
+    fRoofHue.add(params.buildings.roofHueMix, key, 0, 60, 1).name(label);
+  }
+
   // --- Props ---------------------------------------------------------------
   const fProps = gui.addFolder('付帯要素').close();
   fProps.add(params.props, 'fences').name('塀・フェンス');

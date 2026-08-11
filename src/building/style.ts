@@ -137,11 +137,10 @@ export function makeBuildingSpec(
   const roofType: RoofType = rng.weighted(arch.roof);
   const useKawara = roofType !== 'flat' && style.era < 0.3 && rng.chance(0.75);
   const roofFamily: BuildingSpec['roofFamily'] = useKawara ? 'roofKawara' : roofType === 'flat' ? 'concrete' : 'roofMetal';
-  const roofPalette = useKawara ? ROOF_KAWARA : roofType === 'flat' ? CONCRETE : ROOF_METAL;
   const roof =
     roofType === 'flat'
       ? sampleColor(CONCRETE, rng, { h: 0.01, s: 0.03, v: 0.05 })
-      : sampleRoofColor(roofPalette, wall.hsv as Hsv, rng);
+      : sampleRoofColor(useKawara ? ROOF_KAWARA : ROOF_METAL, params.roofHueMix, wall.hsv as Hsv, rng);
 
   // Two-tone walls split at the 1F/2F line.
   const wantsBand = kind !== 'mansion' && style.era > 0.45 && rng.chance(0.38);

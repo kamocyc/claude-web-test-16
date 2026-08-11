@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { RoofHue, RoofHueMix } from '../core/params.js';
 import type { Rng } from '../core/rng.js';
 
 /**
@@ -49,31 +50,51 @@ export const WALL_RC_TILE: readonly (readonly [number, number])[] = [
 ] as const;
 
 /**
- * Blues are held down on both roof palettes. `sampleRoofColor` rejects any
- * candidate not clearly darker than the wall, and the navies are the darkest
- * entries here — so they win far more often than their weight suggests, and the
- * town came out reading blue from the air. The weights below are the corrected
- * ones, not the intended proportions.
+ * Roof colour families. The mix between these is the single most visible
+ * parameter in the whole generator — it is what the town reads as from the air —
+ * so it is a *setting* (`buildings.roofHueMix`) rather than a weight buried in a
+ * table. The per-swatch weights below only distribute a family's share among its
+ * own shades; the family's overall presence comes from the mix.
  */
-export const ROOF_METAL: readonly (readonly [number, number])[] = [
-  [0x8a4f3c, 5], // 赤錆茶 — the classic painted-steel red-brown
-  [0x7d4a38, 4], // deeper red-brown
-  [0x3f4a70, 1.6], // 紺 navy
-  [0x4a5580, 0.8], // lighter navy
-  [0x7a6047, 3], // brown
-  [0x5c626a, 3.5], // 銀黒
-  [0x5c7a72, 1.5], // 青緑
-  [0x474d52, 2], // black
+export type RoofPalette = readonly (readonly [number, number, RoofHue])[];
+
+export const ROOF_METAL: RoofPalette = [
+  [0x8a4f3c, 5, 'redBrown'], // 赤錆茶 — the classic painted-steel red-brown
+  [0x7d4a38, 4, 'redBrown'], // deeper red-brown
+  [0x3f4a70, 2, 'navy'], // 紺 navy
+  [0x4a5580, 1, 'navy'], // lighter navy
+  [0x7a6047, 1, 'brown'], // brown
+  [0x5c626a, 2, 'grey'], // 銀黒
+  [0x474d52, 1.2, 'grey'], // black
+  [0x5c7a72, 1, 'green'], // 青緑
 ] as const;
 
-export const ROOF_KAWARA: readonly (readonly [number, number])[] = [
-  [0x9c4f33, 3.5], // 赤茶 — red-brown pantile
-  [0xb06a44, 2.5], // orange
-  [0x3a4a70, 1.8], // 紺 navy
-  [0x4a6a8c, 1.2], // cobalt
-  [0x62786e, 1.5], // いぶし green
-  [0x565c63, 3], // いぶし銀
+export const ROOF_KAWARA: RoofPalette = [
+  [0x9c4f33, 3, 'redBrown'], // 赤茶 — red-brown pantile
+  [0xb06a44, 1.5, 'redBrown'], // orange
+  [0x3a4a70, 2, 'navy'], // 紺 navy
+  [0x4a6a8c, 1.2, 'navy'], // cobalt
+  [0x565c63, 1.5, 'grey'], // いぶし銀
+  [0x62786e, 1, 'green'], // いぶし green
 ] as const;
+
+/**
+ * Resolve a roof palette against the requested family mix.
+ *
+ * Each family's swatch weights are normalised among themselves first, so a mix
+ * entry is the family's *share of the palette* and not a multiplier on whatever
+ * the table happened to hold. That is what makes the slider mean something: set
+ * 紺 to 20 and 20% of the roofs are navy. A family a palette does not carry —
+ * 瓦 has no plain brown — simply drops out, and the rest renormalise.
+ */
+function pickFamily(entries: RoofPalette, mix: RoofHueMix, rng: Rng): RoofHue | null {
+  const seen = new Map<RoofHue, number>();
+  for (const [, , hue] of entries) {
+    if (!seen.has(hue) && mix[hue] > 0) seen.set(hue, mix[hue]);
+  }
+  if (seen.size === 0) return null;
+  return rng.weighted([...seen.entries()]);
+}
 
 /** Entrance doors and apartment unit doors. */
 export const ACCENT: readonly (readonly [number, number])[] = [
@@ -159,32 +180,39 @@ export function sampleColor(
  * therefore rejected on every draw and only ever reached a roof through the
  * fallback, desaturated. The navies (0.42–0.44) passed, so they inherited the
  * red-browns' weight on top of their own: 59% of pitched roofs came out blue
- * against a palette that asked for 11%. The cap has to clear a real 赤錆茶.
+ * against a palette that asked for 11%. Both caps below clear every swatch in
+ * the tables; they exist to catch the jitter tail, not to veto the palette.
  */
-const ROOF_MAX_SATURATION = 0.64;
+const ROOF_MAX_SATURATION = 0.74;
+const ROOF_MAX_VALUE = 0.72;
 
 /**
- * Pick a roof colour darker than the wall, without desaturating it.
- * Falls back to darkening the best candidate rather than looping forever.
+ * Pick a roof colour: family from the mix, shade from within that family.
  *
- * Rejection here is not free: the loop returns the first candidate that passes,
- * so anything the test rejects hands its palette weight to whatever does pass.
- * The margin was a flat `wall.v - 0.15`, which a taupe or mortar wall pushed
- * below the red-browns — so on those walls only the navies and the greys could
- * ever be drawn. The roof palettes are curated dark to begin with (nothing sits
- * above v 0.55), so the wall comparison only needs to catch the jitter tail.
+ * Choosing the family *first* is the whole point. The loop below returns the
+ * first candidate that passes the wall test, so with one flat palette every
+ * rejected swatch hands its weight to whatever does pass — and the navies, being
+ * the darkest entries, passed on walls the red-browns could not. That is how a
+ * table asking for 11% navy produced a town that was half blue, and no amount of
+ * reweighting the table fixes it. Now rejection can only ever reshuffle shades
+ * inside the family the mix already picked, so `roofHueMix` is a setting that
+ * holds rather than a suggestion.
  */
-const ROOF_MAX_VALUE = 0.55;
-
 export function sampleRoofColor(
-  palette: Palette,
+  entries: RoofPalette,
+  mix: RoofHueMix,
   wall: Hsv,
   rng: Rng,
 ): { color: THREE.Color; hsv: Hsv } {
+  const family = pickFamily(entries, mix, rng);
+  const shades: [number, number][] = entries
+    .filter(([, , hue]) => family === null || hue === family)
+    .map(([c, w]) => [c, w]);
+
   const limit = Math.max(ROOF_MAX_VALUE, wall.v - 0.08);
   let best: Hsv | null = null;
   for (let i = 0; i < 8; i++) {
-    const cand = sampleColor(palette, rng, { h: 0.015, s: 0.05, v: 0.04 }).hsv;
+    const cand = sampleColor(shades, rng, { h: 0.015, s: 0.05, v: 0.04 }).hsv;
     if (cand.v <= limit && cand.s <= ROOF_MAX_SATURATION) {
       return { color: fromHsv(cand), hsv: cand };
     }

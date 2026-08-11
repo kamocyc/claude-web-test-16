@@ -4,6 +4,14 @@
  */
 
 /**
+ * Roof colour families. Declared here rather than beside the palettes because
+ * the mix between them is a setting, and `material/` already depends on `core/`
+ * — the other direction would be a cycle.
+ */
+export type RoofHue = 'redBrown' | 'navy' | 'grey' | 'brown' | 'green';
+export type RoofHueMix = Record<RoofHue, number>;
+
+/**
  * How the street network is laid out.
  *
  * `warped` is the default: a grid built in a warped parameter space, thinned
@@ -183,6 +191,20 @@ export interface BuildingParams {
   orientationJitter: number;
   eavesMin: number;
   eavesMax: number;
+  /**
+   * Share of pitched roofs going to each colour family, as relative parts.
+   *
+   * The mix between these is the most visible single setting in the generator —
+   * a town of 赤錆茶 and a town of 銀黒 read as different places from the air —
+   * and the right answer is a matter of which suburb you have in mind, so it is
+   * exposed rather than tuned. `sampleRoofColor` draws the family from these
+   * before it draws a shade, so rejecting a shade for being too pale against its
+   * wall can no longer move weight to another family — the numbers hold to
+   * within a couple of points, and `test/buildings.test.ts` reports what
+   * actually landed. The exception is 瓦, which carries no plain brown: that
+   * share redistributes among the families the palette does have.
+   */
+  roofHueMix: RoofHueMix;
 }
 
 export interface PropParams {
@@ -318,6 +340,7 @@ export const DEFAULT_PARAMS: CityParams = {
     orientationJitter: 1.5,
     eavesMin: 0.45,
     eavesMax: 0.75,
+    roofHueMix: { redBrown: 22, navy: 18, grey: 38, brown: 12, green: 10 },
   },
   props: {
     fences: true,

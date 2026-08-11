@@ -1,5 +1,7 @@
 import type * as THREE from 'three';
+import { Color } from 'three';
 import { describe, expect, it } from 'vitest';
+import { ROOF_KAWARA, ROOF_METAL } from '../src/material/palettes.js';
 import { DEFAULT_PARAMS, cloneParams } from '../src/core/params.js';
 import { generateCity } from '../src/city/City.js';
 import { makeBuildingSpec, clusterStyle } from '../src/building/style.js';
@@ -203,19 +205,27 @@ describe('building geometry', () => {
    * than their weight implies. Bucketing the colours as built is the only way to
    * see the proportion that actually reaches the street.
    */
+  /**
+   * Nearest swatch, not a hue cut. The families overlap in hue — 赤錆茶 and plain
+   * brown are 4° apart, and 銀黒 is a blue-*hued* grey that an HSL cut happily
+   * calls navy — so bucketing by hue measured something other than the setting
+   * it was supposed to be checking. Jitter is ±0.015 h / ±0.05 s / ±0.04 v, far
+   * inside the gaps between swatches, so the nearest one is the one that was
+   * drawn and this reads back `roofHueMix` exactly.
+   */
+  const SWATCHES = [...ROOF_METAL, ...ROOF_KAWARA];
   const roofHue = (c: THREE.Color): string => {
-    // HSV saturation, not HSL: the palettes are written in HSV, and 銀黒 and
-    // ガルバ black are blue-*hued* greys. An HSL cut called both of them navy,
-    // which put the navy share at 43% when the palette asked for 11% — the
-    // measurement, not the generator, was wrong.
-    const v = Math.max(c.r, c.g, c.b);
-    const s = v === 0 ? 0 : (v - Math.min(c.r, c.g, c.b)) / v;
-    if (s < 0.3) return v < 0.45 ? 'charcoal' : 'grey';
-    const { h } = c.getHSL({ h: 0, s: 0, l: 0 });
-    if (h > 0.52 && h < 0.75) return 'navy';
-    if (h < 0.09 || h > 0.94) return 'redBrown';
-    if (h < 0.14) return 'brown';
-    return 'green';
+    let best = SWATCHES[0]!;
+    let bestD = Infinity;
+    for (const s of SWATCHES) {
+      const t = new Color(s[0]);
+      const d = (t.r - c.r) ** 2 + (t.g - c.g) ** 2 + (t.b - c.b) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = s;
+      }
+    }
+    return best[2];
   };
 
   it('reports the distribution', () => {
