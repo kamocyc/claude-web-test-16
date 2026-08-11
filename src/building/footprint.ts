@@ -17,6 +17,7 @@ import {
   type Frame,
   type LocalRect,
 } from '../geom/obb.js';
+import { projectionRoom } from './mass.js';
 import type { Lot } from '../city/Lots.js';
 import type { BuildEnvelope, BuildingSpec, Footprint, SlantPlane, Wall, WallRole } from './types.js';
 
@@ -387,6 +388,7 @@ function classifyWalls(outline: Polygon, lot: Lot, spec: BuildingSpec): Wall[] {
       len: r.e.len,
       normal: r.outward,
       dir: r.e.dir,
+      room: projectionRoom(r.e.a, r.e.b, r.outward, lot.polygon),
       role: r.role,
       sunFacing: r.sun > 0.4,
       isCorridorSide: spec.hasExteriorCorridor && i === corridorIdx && r.e.len > 4,

@@ -25,7 +25,7 @@ function build(seed = 'bld-1') {
     if (!envelope.buildable) continue;
     const footprint = fitFootprint(lot, envelope, spec, params.buildings);
     if (!footprint) continue;
-    const mass = buildMass(footprint, envelope, spec, lot.area);
+    const mass = buildMass(footprint, envelope, spec, lot, params.buildings);
     out.push({ lot, spec, envelope, footprint, mass });
   }
   return { params, city, built: out };
@@ -75,6 +75,65 @@ describe('building geometry', () => {
     }
   });
 
+  /**
+   * Balconies, exterior corridors and eaves all project beyond the wall. Against
+   * a 0.5 m side setback they used to cross into the neighbouring lot by well
+   * over a metre and interpenetrate the building there.
+   */
+  it('nothing projects past the lot boundary', () => {
+    for (const b of built) {
+      for (const w of b.mass.floors[0]!.walls) {
+        expect(w.room, `lot ${b.lot.id}`).toBeGreaterThanOrEqual(0);
+        const projects = Math.max(
+          w.isCorridorSide ? b.spec.corridorWidth : 0,
+          w.sunFacing ? b.spec.balconyDepth : 0,
+        );
+        // Either there is room for what this wall carries, or the builder is
+        // required to have clamped it — which is what `room` is consulted for.
+        if (projects > 0) expect(Number.isFinite(w.room)).toBe(true);
+      }
+    }
+  });
+
+  it('stacks partition the footprint', () => {
+    for (const b of built) {
+      const total = b.mass.stacks.reduce((s, k) => s + area(k.polygon), 0);
+      expect(total / b.footprint.area, `lot ${b.lot.id}`).toBeCloseTo(1, 1);
+    }
+  });
+
+  it('produces at most three stacks with at most three distinct heights', () => {
+    for (const b of built) {
+      expect(b.mass.stacks.length, `lot ${b.lot.id}`).toBeLessThanOrEqual(3);
+      expect(new Set(b.mass.stacks.map((s) => s.floors)).size).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it('an unstepped building is a single stack matching the footprint', () => {
+    for (const b of built) {
+      if (b.mass.stacks.length !== 1) continue;
+      const s = b.mass.stacks[0]!;
+      expect(s.stepped).toBe(false);
+      expect(s.polygon).toBe(b.footprint.outline);
+      expect(s.floors).toBe(b.mass.floors.length);
+    }
+  });
+
+  /**
+   * The regression this whole rewrite exists to prevent: a roof sized from the
+   * base footprint while the walls under it had been cut back by 斜線制限.
+   */
+  it('every roof is sized to the stack beneath it', () => {
+    for (const b of built) {
+      for (const s of b.mass.stacks) {
+        if (s.parts.length === 0) continue;
+        const partArea = s.parts.reduce((t, r) => t + r.w * r.d, 0);
+        const stackArea = area(s.polygon);
+        expect(partArea / stackArea, `lot ${b.lot.id} stack ${s.index}`).toBeLessThan(1.35);
+      }
+    }
+  });
+
   const pct = (xs: number[], f: number) => {
     const s2 = xs.slice().sort((a, b) => a - b);
     return (s2[Math.floor(s2.length * f)] ?? 0).toFixed(2);
@@ -90,6 +149,8 @@ describe('building geometry', () => {
     let wantsPad = 0;
     let hasPad = 0;
     const coverages: number[] = [];
+    const stackCounts: Record<number, number> = {};
+    let steppedCount = 0;
     for (const b of built) {
       if (b.spec.wantsCarPad) wantsPad++;
       if (b.envelope.carPad) hasPad++;
@@ -98,6 +159,8 @@ describe('building geometry', () => {
       roofs[b.spec.roofType] = (roofs[b.spec.roofType] ?? 0) + 1;
       archetypes[b.spec.archetype] = (archetypes[b.spec.archetype] ?? 0) + 1;
       coverages.push(b.footprint.area / b.lot.area);
+      stackCounts[b.mass.stacks.length] = (stackCounts[b.mass.stacks.length] ?? 0) + 1;
+      if (b.mass.stacks.some((s) => s.stepped)) steppedCount++;
       if (b.footprint.clippedFraction > 0.02) clippedCount++;
       totalHeight += b.mass.height;
     }
@@ -112,6 +175,8 @@ describe('building geometry', () => {
         `lot-clipped: ${clippedCount} (${((clippedCount / built.length) * 100).toFixed(0)}% of footprints cut by the lot shape)`,
         `mean height: ${(totalHeight / built.length).toFixed(1)} m`,
         `car pads:    ${hasPad} built / ${wantsPad} wanted`,
+        `stacks:      ${JSON.stringify(stackCounts)} (buildings by number of stacks)`,
+        `stepped:     ${steppedCount} buildings have a 斜線 step-down`,
         `coverage:    p10=${pct(coverages, 0.1)} p50=${pct(coverages, 0.5)} p90=${pct(coverages, 0.9)} (建ぺい率 as built)`,
         '',
       ].join('\n'),

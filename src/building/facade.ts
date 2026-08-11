@@ -4,7 +4,7 @@ import { makeRng, subSeed, type Rng } from '../core/rng.js';
 import * as V from '../geom/vec2.js';
 import { groundGrime } from '../material/palettes.js';
 import type { GeometryBuffer } from '../build/GeometryBuffer.js';
-import type { BuildingSpec, Floor, Footprint, Wall } from './types.js';
+import type { BuildingSpec, Floor, Wall } from './types.js';
 
 /**
  * Façade generation as a one-dimensional split grammar per wall, per floor.
@@ -34,6 +34,9 @@ export interface Bay {
   u1: number;
 }
 
+/** Below this a balcony is not worth building; the wall gets windows instead. */
+export const MIN_BALCONY_DEPTH = 0.75;
+
 export interface FacadeBuffers {
   wall: GeometryBuffer;
   glass: GeometryBuffer;
@@ -43,7 +46,6 @@ export interface FacadeBuffers {
 
 export function buildFacades(
   bufs: FacadeBuffers,
-  footprint: Footprint,
   floors: Floor[],
   spec: BuildingSpec,
   params: BuildingParams,
@@ -57,9 +59,9 @@ export function buildFacades(
   let previous = new Map<string, BayKind[]>();
 
   for (const floor of floors) {
-    // Walls are taken from the floor's own outline, so slant-clipped upper
-    // floors get their own (shorter) wall set rather than the base one.
-    const walls = wallsForFloor(footprint, floor);
+    // Cached on the floor by `buildMass`, so every detail builder sees the same
+    // per-level wall set and follows a 斜線 step-back identically.
+    const walls = floor.walls;
     const current = new Map<string, BayKind[]>();
 
     for (let w = 0; w < walls.length; w++) {
@@ -103,49 +105,6 @@ function baysFromKinds(kinds: BayKind[], module: number): Bay[] {
   return bays;
 }
 
-/**
- * Map the base footprint's wall classification onto a (possibly clipped) floor
- * outline by matching direction and proximity.
- */
-function wallsForFloor(footprint: Footprint, floor: Floor): Wall[] {
-  const poly = floor.polygon;
-  const out: Wall[] = [];
-  for (let i = 0, n = poly.length; i < n; i++) {
-    const a = poly[i]!;
-    const b = poly[(i + 1) % n]!;
-    const d = V.sub(b, a);
-    const len = V.len(d);
-    if (len < 0.15) continue;
-    const dir = V.scale(d, 1 / len);
-    const normal = V.neg(V.perp(dir));
-    const mid = V.lerp(a, b, 0.5);
-
-    // Inherit the role from the nearest base wall pointing the same way.
-    let best: Wall | null = null;
-    let bestScore = -Infinity;
-    for (const bw of footprint.walls) {
-      const align = V.dot(bw.normal, normal);
-      if (align < 0.7) continue;
-      const score = align - V.distToSegment(mid, bw.a, bw.b) * 0.05;
-      if (score > bestScore) {
-        bestScore = score;
-        best = bw;
-      }
-    }
-    out.push({
-      a,
-      b,
-      len,
-      dir,
-      normal,
-      role: best?.role ?? 'side',
-      sunFacing: best?.sunFacing ?? normal.y > 0.4,
-      isCorridorSide: best?.isCorridorSide ?? false,
-    });
-  }
-  return out;
-}
-
 function layoutWall(
   wall: Wall,
   floor: Floor,
@@ -180,7 +139,10 @@ function layoutWall(
         place(rng.chance(0.5) ? 0 : slots - 3, 3, 'garage');
       }
     }
-    if (!ground && wall.sunFacing && slots >= 4) {
+    // A balcony needs somewhere to project. On a tight side boundary there is
+    // none, and the wall gets ordinary windows instead — which is exactly what
+    // a real house on a narrow lot does.
+    if (!ground && wall.sunFacing && slots >= 4 && wall.room >= MIN_BALCONY_DEPTH) {
       const span = Math.min(slots - 1, 3 + rng.int(2));
       place(Math.max(0, Math.floor((slots - span) * rng.range(0.15, 0.85))), span, 'balcony');
     }
@@ -192,7 +154,7 @@ function layoutWall(
         place(u, 1, 'unitDoor');
         if (unitSlots >= 3) place(u + unitSlots - 2, 1, 'windowSmall');
       }
-    } else if (wall.sunFacing || wall.role === 'front') {
+    } else if ((wall.sunFacing || wall.role === 'front') && wall.room >= MIN_BALCONY_DEPTH) {
       const balconySlots = Math.max(2, unitSlots - 1);
       for (let u = 0; u + unitSlots <= slots; u += unitSlots) {
         place(u, balconySlots, 'balcony');
@@ -329,7 +291,7 @@ function buildWallGeometry(
         buildWindow(bufs, wall, at, bay.u0 + 0.1, bay.u1 - 0.1, bottom, top, spec, rng, false);
         solid(bay.u0, bay.u0 + 0.1, floor.y0, floor.y1);
         solid(bay.u1 - 0.1, bay.u1, floor.y0, floor.y1);
-        buildBalcony(bufs, at, bay.u0, bay.u1, floor.y0, spec);
+        buildBalcony(bufs, at, bay.u0, bay.u1, floor.y0, spec, wall.room);
         break;
       }
     }
@@ -502,8 +464,10 @@ function buildBalcony(
   u1: number,
   y0: number,
   spec: BuildingSpec,
+  room: number,
 ): void {
-  const depth = spec.balconyDepth;
+  const depth = Math.min(spec.balconyDepth, room);
+  if (depth < MIN_BALCONY_DEPTH) return;
   const railH = 1.1;
   const slabT = 0.16;
 

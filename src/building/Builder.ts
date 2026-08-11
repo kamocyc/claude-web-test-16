@@ -1,7 +1,7 @@
 import type { BuildingParams } from '../core/params.js';
 import { makeRng, subSeed } from '../core/rng.js';
 import * as V from '../geom/vec2.js';
-import { area } from '../geom/polygon.js';
+import { contains } from '../geom/polygon.js';
 import type { Lot } from '../city/Lots.js';
 import { GeometryBuffer } from '../build/GeometryBuffer.js';
 import type { MaterialFamily } from '../material/materials.js';
@@ -54,7 +54,7 @@ export function buildBuilding(
   // street while genuinely rearranging its openings.
   const facadeSeed = spec.mirrored ? subSeed(lot.seed, 'mirror') : lot.seed;
 
-  const mass = buildMass(footprint, envelope, spec, lot.area);
+  const mass = buildMass(footprint, envelope, spec, lot, params);
   const buffers: BufferSet = {};
 
   const wallBuf = bufferFor(buffers, spec.wallFamily);
@@ -70,27 +70,39 @@ export function buildBuilding(
     accent: metalBuf,
   };
 
-  buildFacades(facadeBufs, footprint, mass.floors, spec, params, facadeSeed);
+  buildFacades(facadeBufs, mass.floors, spec, params, facadeSeed);
 
-  // Floor slabs showing at each terrace step, plus the terrace surfaces
-  // themselves — where an upper floor is smaller than the one below.
-  concreteBuf.setColor({ r: 0.8, g: 0.79, b: 0.76 });
-  for (const floor of mass.floors) {
-    for (const t of floor.terrace) {
-      if (area(t) < 1.2) continue;
-      concreteBuf.pushCap(t, floor.y0 + 0.04, true);
-      concreteBuf.pushPrism(t, floor.y0, floor.y0 + 0.9, false, false);
-    }
-  }
-
-  // Roof on the topmost floor's outline.
-  const top = mass.floors[mass.floors.length - 1]!;
+  // One roof per stack. The tallest keeps the archetype's roof; a part stepped
+  // down by 斜線制限 gets a flat roof and becomes a roof terrace.
   roofBuf.setColor({
     r: spec.roofColor.r * spec.valueShift,
     g: spec.roofColor.g * spec.valueShift,
     b: spec.roofColor.b * spec.valueShift,
   });
-  const roof = buildRoof(roofBuf, footprint, top.polygon, top.y1, spec);
+  const tall = mass.stacks[0]!;
+  let topPeak = 0;
+
+  // The eaves overhang every wall, so on a 0.5 m side setback two neighbours'
+  // roofs met in the middle. Clamp to the tightest wall on the building; a
+  // shallow eave is normal on a modern narrow-lot house anyway.
+  const eaveRoom = Math.min(...mass.floors[0]!.walls.map((w) => w.room), spec.eaves);
+  const roofSpec: BuildingSpec = { ...spec, eaves: Math.max(0.12, Math.min(spec.eaves, eaveRoom)) };
+
+  for (const stack of mass.stacks) {
+    if (stack.stepped) {
+      concreteBuf.setColor({ r: 0.8, g: 0.79, b: 0.76 });
+      buildRoof(
+        concreteBuf,
+        stack,
+        stack.y1,
+        // A terrace needs a guarding upstand; a house parapet is only 45–70 cm.
+        { ...roofSpec, parapetHeight: Math.max(spec.parapetHeight, 1.05) },
+        'flat',
+      );
+    } else {
+      topPeak = buildRoof(roofBuf, stack, stack.y1, roofSpec).peak;
+    }
+  }
 
   // Ground-floor plinth: a low band of concrete under every Japanese house.
   concreteBuf.setColor({ r: 0.72 * groundGrime(0), g: 0.71 * groundGrime(0), b: 0.68 * groundGrime(0) });
@@ -103,7 +115,6 @@ export function buildBuilding(
   if (spec.hasExteriorCorridor) {
     buildCorridorAndStairs(
       { wall: concreteBuf, metal: metalBuf, accent: metalBuf, glass: glassBuf },
-      footprint,
       mass,
       spec,
       rng,
@@ -113,19 +124,19 @@ export function buildBuilding(
   if (spec.hasPenthouse) {
     buildRooftopPlant(
       { wall: concreteBuf, metal: metalBuf },
-      top.polygon,
-      top.y1 + roof.peak,
+      tall.polygon,
+      tall.y1 + topPeak,
       spec,
       rng,
     );
   }
 
   if (spec.kind !== 'house') {
-    buildLaundry(metalBuf, footprint, mass, spec, rng);
+    buildLaundry(metalBuf, mass, spec, rng);
   }
 
   // Downspouts (竪樋) every 6–8 m around the building.
-  buildDownspouts(metalBuf, footprint, mass, spec, rng);
+  buildDownspouts(metalBuf, mass, spec, rng);
 
   let triangles = 0;
   for (const b of Object.values(buffers)) if (b) triangles += b.triangleCount;
@@ -133,24 +144,38 @@ export function buildBuilding(
   return { lot, spec, envelope, footprint, mass, buffers, triangles };
 }
 
-/** Thin vertical pipes at the building corners and along long walls. */
+/**
+ * Thin vertical pipes at the corners and along long walls, per stack.
+ *
+ * These used to run the full building height along the *base* footprint, so on a
+ * stepped building the upper half hung in mid-air, offset from the wall it was
+ * supposed to be fixed to. A pipe on a step-back wall now starts at the terrace
+ * below it rather than at grade.
+ */
 function buildDownspouts(
   buf: GeometryBuffer,
-  footprint: Footprint,
   mass: BuildingMass,
   spec: BuildingSpec,
   rng: ReturnType<typeof makeRng>,
 ): void {
   buf.setColor({ r: 0.62, g: 0.61, b: 0.58 });
   const spacing = spec.kind === 'mansion' ? 7 : 5.5;
-  for (const wall of footprint.walls) {
-    if (wall.len < 2) continue;
-    const n = Math.max(1, Math.round(wall.len / spacing));
-    for (let i = 0; i <= n; i++) {
-      if (i > 0 && i < n && rng.chance(0.5)) continue;
-      const t = i === 0 ? 0.25 : i === n ? wall.len - 0.25 : (wall.len * i) / n;
-      const p = V.addScaled(V.addScaled(wall.a, wall.dir, t), wall.normal, 0.07);
-      buf.pushBox(p.x, mass.height / 2, p.y, 0.1, mass.height, 0.1);
+
+  for (const stack of mass.stacks) {
+    for (const wall of stack.walls) {
+      if (wall.len < 2) continue;
+      const probe = V.addScaled(V.lerp(wall.a, wall.b, 0.5), wall.normal, 0.2);
+      let y0 = 0;
+      for (const other of mass.stacks) {
+        if (other !== stack && contains(other.polygon, probe)) y0 = Math.max(y0, other.y1);
+      }
+      const n = Math.max(1, Math.round(wall.len / spacing));
+      for (let i = 0; i <= n; i++) {
+        if (i > 0 && i < n && rng.chance(0.5)) continue;
+        const t = i === 0 ? 0.25 : i === n ? wall.len - 0.25 : (wall.len * i) / n;
+        const p = V.addScaled(V.addScaled(wall.a, wall.dir, t), wall.normal, 0.07);
+        buf.pushOrientedBox(p.x, p.y, wall.dir, 0.1, 0.1, y0, stack.y1);
+      }
     }
   }
 }

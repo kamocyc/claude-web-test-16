@@ -1,7 +1,8 @@
 import type { Rng } from '../../core/rng.js';
 import * as V from '../../geom/vec2.js';
 import type { GeometryBuffer } from '../../build/GeometryBuffer.js';
-import type { BuildingMass, BuildingSpec, Footprint } from '../types.js';
+import { contains } from '../../geom/polygon.js';
+import type { BuildingMass, BuildingSpec } from '../types.js';
 
 /**
  * 物干し — laundry poles and hanging washing on balconies.
@@ -21,19 +22,23 @@ const CLOTHES = [
 
 export function buildLaundry(
   buf: GeometryBuffer,
-  footprint: Footprint,
   mass: BuildingMass,
   spec: BuildingSpec,
   rng: Rng,
 ): void {
   // Laundry goes on the sunny side, which is where the balconies are.
-  const walls = footprint.walls.filter((w) => w.sunFacing && w.len > 3);
+  const base = mass.floors[0]!;
+  const walls = base.walls.filter((w) => w.sunFacing && w.len > 3);
   if (walls.length === 0) return;
 
   for (const wall of walls) {
     const units = Math.max(1, Math.floor(wall.len / spec.unitWidth));
     for (const floor of mass.floors) {
       if (floor.index === 0 && spec.kind === 'mansion') continue;
+      // Skip a floor that has stepped back off this wall, or the washing hangs
+      // in mid-air where the balcony used to be.
+      const probe = V.addScaled(V.lerp(wall.a, wall.b, 0.5), wall.normal, -0.15);
+      if (!contains(floor.polygon, probe)) continue;
       for (let i = 0; i < units; i++) {
         if (!rng.chance(0.45)) continue;
         const u0 = i * spec.unitWidth + 0.4;

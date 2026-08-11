@@ -4,7 +4,20 @@ import { intersectPoly } from '../geom/boolean.js';
 import { offsetOutward } from '../geom/offset.js';
 import { expandRect, polyToWorld, toLocal, toWorld, type Frame, type LocalRect } from '../geom/obb.js';
 import type { GeometryBuffer } from '../build/GeometryBuffer.js';
-import type { BuildingSpec, Footprint } from './types.js';
+import type { BuildingSpec } from './types.js';
+
+/**
+ * What a roof needs to know about the thing it sits on. `Stack` satisfies this
+ * structurally, so the builder needs no adapter.
+ */
+export interface RoofTarget {
+  polygon: Polygon;
+  /** Rectangles driving a pitched roof, expressed in `frame`. */
+  parts: LocalRect[];
+  frame: Frame;
+  /** `polygon` is materially smaller than the union of `parts`. */
+  cut: boolean;
+}
 
 /**
  * Roof generation — and the reason a straight skeleton is never needed.
@@ -33,19 +46,19 @@ const FASCIA = 0.22;
 
 export function buildRoof(
   buf: GeometryBuffer,
-  footprint: Footprint,
-  topPolygon: Polygon,
+  target: RoofTarget,
   eaveY: number,
   spec: BuildingSpec,
+  roofType: BuildingSpec['roofType'] = spec.roofType,
 ): RoofResult {
-  switch (spec.roofType) {
+  switch (roofType) {
     case 'flat':
-      return buildFlatRoof(buf, topPolygon, eaveY, spec);
+      return buildFlatRoof(buf, target.polygon, eaveY, spec);
     case 'shed':
-      return buildShedRoof(buf, footprint, topPolygon, eaveY, spec);
+      return buildShedRoof(buf, target, eaveY, spec);
     case 'gable':
     case 'hip':
-      return buildPitchedRoof(buf, footprint, topPolygon, eaveY, spec);
+      return buildPitchedRoof(buf, target, eaveY, spec, roofType);
   }
 }
 
@@ -67,13 +80,13 @@ function buildFlatRoof(
 /** 片流れ: a single plane. Exact on any polygon — height is affine in (x, z). */
 function buildShedRoof(
   buf: GeometryBuffer,
-  footprint: Footprint,
-  poly: Polygon,
+  target: RoofTarget,
   eaveY: number,
   spec: BuildingSpec,
 ): RoofResult {
+  const poly = target.polygon;
   const envelope = offsetOutward(poly, spec.eaves)[0] ?? poly;
-  const axis = spec.ridgeAlongStreet ? V.perp(footprint.frame.xAxis) : footprint.frame.xAxis;
+  const axis = spec.ridgeAlongStreet ? V.perp(target.frame.xAxis) : target.frame.xAxis;
   const dir = V.normalize(axis);
 
   let minT = Infinity;
@@ -107,17 +120,21 @@ function buildShedRoof(
 /** 切妻 / 寄棟, built per constituent rectangle. */
 function buildPitchedRoof(
   buf: GeometryBuffer,
-  footprint: Footprint,
-  poly: Polygon,
+  target: RoofTarget,
   eaveY: number,
   spec: BuildingSpec,
+  roofType: 'gable' | 'hip',
 ): RoofResult {
-  const frame = footprint.frame;
+  const frame = target.frame;
+  const poly = target.polygon;
   const envelope = offsetOutward(poly, spec.eaves)[0] ?? poly;
-  const heavyClip = footprint.clippedFraction > 0.015;
+  // `cut` now means what its name says. The old test — the *lot* clip fraction —
+  // could never see a slant cut, so a roof built over a shrunken top floor was
+  // never clipped back and floated several metres past the walls on every side.
+  const heavyClip = target.cut;
   let peak = 0;
 
-  for (const part of footprint.parts) {
+  for (const part of target.parts) {
     const r = expandRect(part, spec.eaves);
     // Ridge runs along the longer side by default; ridgeAlongStreet flips it to
     // run parallel to the street (平入り) instead of into it (妻入り).
@@ -126,9 +143,8 @@ function buildPitchedRoof(
     const rise = halfSpan * spec.roofPitch;
     peak = Math.max(peak, rise);
 
-    const faces = spec.roofType === 'gable'
-      ? gableFaces(r, ridgeAlongX, rise)
-      : hipFaces(r, ridgeAlongX, rise);
+    const faces =
+      roofType === 'gable' ? gableFaces(r, ridgeAlongX, rise) : hipFaces(r, ridgeAlongX, rise);
 
     for (const face of faces) {
       const world = polyToWorld(face.poly, frame);
@@ -145,7 +161,7 @@ function buildPitchedRoof(
     }
 
     // Gable ends: vertical triangles closing the volume between the two slopes.
-    if (spec.roofType === 'gable') {
+    if (roofType === 'gable') {
       for (const tri of gableEndTriangles(r, ridgeAlongX, rise)) {
         const a = toWorld(tri[0], frame);
         const b = toWorld(tri[1], frame);

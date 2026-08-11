@@ -123,6 +123,13 @@ export interface Wall {
   sunFacing: boolean;
   /** The face carrying the exterior corridor, for apartments. */
   isCorridorSide: boolean;
+  /**
+   * How far anything may project from this wall before crossing the lot
+   * boundary, metres. Balconies (1.0–2.1 m) and exterior corridors (1.1–1.8 m)
+   * were being built at full depth against a 0.5 m side setback, so a mansion's
+   * corridor and its neighbour's balcony overlapped by around 2.5 m.
+   */
+  room: number;
 }
 
 export interface Footprint {
@@ -139,14 +146,47 @@ export interface Footprint {
 
 export interface Floor {
   polygon: Polygon;
+  /** Walls derived from `polygon`, roles inherited from the base footprint. */
+  walls: Wall[];
   y0: number;
   y1: number;
   index: number;
-  /** Where this floor is smaller than the one below: a roof terrace. */
-  terrace: Polygon[];
+}
+
+/**
+ * A plan region carrying a uniform number of floors, from the ground up.
+ *
+ * 斜線制限 used to be expressed by clipping every floor into an arbitrary
+ * polygon, which left the roof — built from the base footprint — hanging over a
+ * shrunken top floor. Expressing it as *parts of the building having different
+ * floor counts* is both what real buildings do and what keeps every roof sized
+ * to the walls beneath it.
+ */
+export interface Stack {
+  polygon: Polygon;
+  /** Walls derived from `polygon`, roles inherited from the base footprint. */
+  walls: Wall[];
+  floors: number;
+  y0: number;
+  y1: number;
+  /** The tallest stack keeps the archetype's roof; stepped-down parts go flat. */
+  roofType: RoofType;
+  /** Rectangles driving a pitched roof, expressed in `frame`. */
+  parts: LocalRect[];
+  frame: Frame;
+  /** `polygon` is materially smaller than the union of `parts`: clip roof faces. */
+  cut: boolean;
+  /** Stepped down by a slant plane, so its top is a roof terrace. */
+  stepped: boolean;
+  /** 0 = tallest. */
+  index: number;
 }
 
 export interface BuildingMass {
+  /** Level-by-level plan outlines. Consumed by the façade builder. */
   floors: Floor[];
+  /** Plan regions of uniform floor count, tallest first. Union == the footprint. */
+  stacks: Stack[];
+  /** Height of the tallest stack, excluding the roof. */
   height: number;
 }
