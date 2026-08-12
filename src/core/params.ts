@@ -12,14 +12,24 @@ export type RoofHue = 'redBrown' | 'navy' | 'grey' | 'brown' | 'green';
 export type RoofHueMix = Record<RoofHue, number>;
 
 /**
- * How the street network is laid out.
+ * How the street network is laid out. Both are the same generator — Tier-1
+ * roads cut the town into districts, each district grids itself — differing
+ * only in how much the districts are allowed to disagree with each other.
  *
- * `warped` is the default: a grid built in a warped parameter space, thinned
- * and jogged, which is what an organically grown Japanese suburb looks like.
- * `grid` is the planned-development alternative — a plain orthogonal grid with
- * a couple of diagonal through-roads, coarser and much calmer.
+ * `district` is the default: several districts at visibly different angles,
+ * with dead ends and staggered junctions. An organically grown suburb, where
+ * each development was fitted to the land it replaced.
+ * `grid` is the planned 区画整理 alternative — one dominant orientation,
+ * nothing deleted, nothing dead-ending, and a pair of diagonal through-roads.
  */
-export type RoadLayout = 'warped' | 'grid';
+export type RoadLayout = 'district' | 'grid';
+
+/**
+ * Declared here rather than beside the road generator because `perimeterClass`
+ * is a setting, and `city/` already depends on `core/` — the other direction
+ * would be a cycle. `city/Roads.ts` re-exports it as the canonical name.
+ */
+export type RoadClass = 'arterial' | 'collector' | 'local' | 'private';
 
 export interface RoadParams {
   layout: RoadLayout;
@@ -41,20 +51,56 @@ export interface RoadParams {
    * development looks like once it has been fitted to the parcels it replaced.
    */
   gridSpacingVariation: number;
-  /** Long-wavelength warp: amplitude and wavelength. */
-  warpAmplitude1: number;
-  warpWavelength1: number;
-  warpAmplitude2: number;
-  warpWavelength2: number;
-  /** Fraction of local edges deleted outright. */
+  /** Fraction of street spans deleted outright. */
   deleteFraction: number;
-  /** Fraction of remaining local edges truncated into dead ends. */
+  /** Fraction of terminal spans truncated into dead ends. */
   deadEndFraction: number;
-  /** Fraction of 4-way junctions jogged into offset T-junctions. */
-  jogFraction: number;
-  jogDistance: number;
   nodeSnap: number;
   minEdgeLength: number;
+
+  // --- District layout ------------------------------------------------------
+  /** One grain for the whole town: how far the base axis tilts off north, degrees. */
+  townAxisJitter: number;
+  /** Bends per Tier-1 road. A real 幹線道路 has two or three, not ninety. */
+  tier1BendCount: number;
+  /** Hard cap on a single Tier-1 bend, degrees. */
+  tier1MaxBend: number;
+  /** Two Tier-1 roads may never come closer than this except where they cross, metres. */
+  tier1MinSpacing: number;
+  /**
+   * Junctions sharper than this are not built. Acute crossings are what produce
+   * the overlapping asphalt and the sliver blocks that get discarded, so this
+   * is a hard constraint on the skeleton rather than a preference.
+   */
+  minJunctionAngle: number;
+  /** How far a district's grid may rotate off its dominant boundary road, degrees. */
+  districtAxisJitter: number;
+  /** Faces below this get no local grid and stay a single block, m². */
+  minDistrictArea: number;
+  /** Floor on a local grid gap, metres. */
+  minLocalSpacing: number;
+  /** Share of local street lines given a 食い違い offset. */
+  staggerFraction: number;
+  staggerDistance: number;
+  /** Probability a local street bends once, at one of its junctions. */
+  localBendChance: number;
+  /**
+   * Cap on that bend, degrees. The bend sits *on* a junction, so every block
+   * edge stays straight and every lot along a run keeps one exact frontage
+   * direction — the street reads as bent without the houses fanning out.
+   */
+  localBendAngle: number;
+  /** Gap required between the ribbons of two roads that do not share a node, metres. */
+  roadClearance: number;
+  /**
+   * Close the town square with a road. Effectively mandatory: `extractFaces`
+   * discards the single clockwise outer cycle, so without a ring the outermost
+   * region is not a face and there are no boundary districts at all.
+   */
+  perimeterRoad: boolean;
+  perimeterClass: RoadClass;
+  /** Assign the road hierarchy to the district's own grid lines. */
+  promoteGridLines: boolean;
 }
 
 export interface LotParams {
@@ -189,6 +235,14 @@ export interface BuildingParams {
   mirrorChance: number;
   /** Building orientation jitter about the street normal, degrees. */
   orientationJitter: number;
+  /**
+   * How closely a lot-aligned footprint frame must still agree with the street
+   * before it may be used, as |cos| of the angle between them. The footprint
+   * fitter searches several frames and keeps whichever holds the largest
+   * rectangle, so this is what stops a skewed side boundary from turning the
+   * house away from the road it fronts. 0.97 is about 14°.
+   */
+  frameAlignMin: number;
   eavesMin: number;
   eavesMax: number;
   /**
@@ -246,26 +300,36 @@ export interface CityParams {
 export const DEFAULT_PARAMS: CityParams = {
   seed: 'sakura-3',
   roads: {
-    layout: 'warped',
-    diagonalCount: 0,
+    layout: 'district',
+    diagonalCount: 2,
     extent: 320,
     arterialCount: 2,
     arterialWidth: 13,
     collectorWidth: 7,
-    collectorSpacing: 120,
+    collectorSpacing: 170,
     localWidth: 4.8,
     localSpacing: 45,
-    gridSpacingVariation: 0.2,
-    warpAmplitude1: 14,
-    warpWavelength1: 180,
-    warpAmplitude2: 4,
-    warpWavelength2: 60,
-    deleteFraction: 0.18,
-    deadEndFraction: 0.12,
-    jogFraction: 0.15,
-    jogDistance: 6,
+    gridSpacingVariation: 0.18,
+    deleteFraction: 0.1,
+    deadEndFraction: 0.14,
     nodeSnap: 2.5,
     minEdgeLength: 7,
+    townAxisJitter: 10,
+    tier1BendCount: 2,
+    tier1MaxBend: 12,
+    tier1MinSpacing: 110,
+    minJunctionAngle: 32,
+    districtAxisJitter: 10,
+    minDistrictArea: 3000,
+    minLocalSpacing: 28,
+    staggerFraction: 0.3,
+    staggerDistance: 7,
+    localBendChance: 0.3,
+    localBendAngle: 4,
+    roadClearance: 2.0,
+    perimeterRoad: true,
+    perimeterClass: 'local',
+    promoteGridLines: false,
   },
   lots: {
     minLotArea: 10,
@@ -282,7 +346,7 @@ export const DEFAULT_PARAMS: CityParams = {
     widthSigma: 2,
     widthMin: 5,
     widthMax: 22,
-    cutAngleJitter: 4,
+    cutAngleJitter: 2.5,
     minCoreArea: 520,
     flagLotMinCore: 110,
     privateLaneWidth: 4,
@@ -338,6 +402,7 @@ export const DEFAULT_PARAMS: CityParams = {
     bayAlignChance: 0.8,
     mirrorChance: 0.5,
     orientationJitter: 1.5,
+    frameAlignMin: 0.97,
     eavesMin: 0.45,
     eavesMax: 0.75,
     roofHueMix: { redBrown: 22, navy: 18, grey: 38, brown: 12, green: 10 },
@@ -370,34 +435,41 @@ export const DEFAULT_PARAMS: CityParams = {
  * the presets are kept here and applied as a group.
  */
 export const ROAD_LAYOUT_PRESETS: Record<RoadLayout, Partial<RoadParams>> = {
-  warped: {
+  district: {
     localSpacing: 45,
-    warpAmplitude1: 14,
-    warpAmplitude2: 4,
-    deleteFraction: 0.18,
-    deadEndFraction: 0.12,
-    jogFraction: 0.15,
-    diagonalCount: 0,
-    collectorSpacing: 120,
+    gridSpacingVariation: 0.18,
+    arterialCount: 2,
+    // The diagonals are the main source of districts that disagree with each
+    // other: a district with one bounding road at 40° inherits an axis nothing
+    // else in the town shares.
+    diagonalCount: 2,
+    collectorSpacing: 170,
+    deleteFraction: 0.1,
+    deadEndFraction: 0.14,
+    staggerFraction: 0.3,
+    localBendChance: 0.3,
+    districtAxisJitter: 10,
+    promoteGridLines: false,
   },
   grid: {
-    // A complete orthogonal grid — every street runs the full width of the
-    // town, nothing is deleted and nothing dead-ends — with the spacing between
-    // neighbouring streets varying by ±20%, plus two diagonal through-roads.
-    // Coarser than the warped layout: without the jogs and dead ends a 45 m
-    // grid still reads as calm, and the blocks have to be deep enough for two
-    // back-to-back rows of lots plus whatever the private lanes reach.
+    // One orientation for the whole town, nothing deleted and nothing
+    // dead-ending, plus two diagonal through-roads. Coarser than the district
+    // layout: without the staggers and dead ends a 45 m grid still reads as
+    // calm, and the blocks have to be deep enough for two back-to-back rows of
+    // lots plus whatever the private lanes reach.
     localSpacing: 52,
     gridSpacingVariation: 0.2,
-    warpAmplitude1: 0,
-    warpAmplitude2: 0,
+    // No arterials of its own: the hierarchy is assigned to the grid lines
+    // instead, so a wide road never slices a block it was not part of.
+    arterialCount: 0,
+    diagonalCount: 2,
+    collectorSpacing: 210,
     deleteFraction: 0,
     deadEndFraction: 0,
-    jogFraction: 0,
-    diagonalCount: 2,
-    // Every 4th grid line becomes a collector. Closer than that and too much of
-    // the town fronts a wide road, which pushes the mix towards apartments.
-    collectorSpacing: 210,
+    staggerFraction: 0,
+    localBendChance: 0,
+    districtAxisJitter: 0,
+    promoteGridLines: true,
   },
 };
 

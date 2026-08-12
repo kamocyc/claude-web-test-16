@@ -41,7 +41,17 @@ function miterOffset(poly: Polygon, delta: number): Polygon | null {
   return out;
 }
 
-/** The band of points within `d` of the polygon boundary, as a multipolygon. */
+/**
+ * The band of points within `d` of the polygon boundary, as overlapping pieces.
+ *
+ * Deliberately *not* unioned. A band that runs all the way round a closed ring
+ * is an annulus, and a `Polygon` here is a single ring with no way to express
+ * the hole — so unioning it returned the annulus's outer boundary, a solid
+ * covering the whole polygon, and `offsetInward` below then reported that a
+ * concave plan eroded to nothing however wide it was. The booleans take a
+ * multipolygon clip and union it internally anyway, so handing the pieces over
+ * as they are is both correct and one step shorter.
+ */
 function boundaryBand(poly: Polygon, d: number): Polygon[] {
   const parts: Polygon[] = [];
   for (const e of edges(poly)) {
@@ -54,7 +64,7 @@ function boundaryBand(poly: Polygon, d: number): Polygon[] {
     ]);
   }
   for (const p of poly) parts.push(circlePolygon(p, d, DISC_SEGMENTS));
-  return unionPoly(parts, { tolerance: 0.005, minEdge: 0.01, minArea: 1e-4 });
+  return parts;
 }
 
 /**

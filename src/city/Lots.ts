@@ -16,6 +16,8 @@ import { differencePoly, intersectPoly, largest, multiArea, unionPoly } from '..
 import { cleanPolygon } from '../geom/simplify.js';
 import type { Block } from './Blocks.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
+import type { VacancyReason } from '../building/types.js';
+import { laneClears } from './RoadClearance.js';
 
 /**
  * Lot subdivision — the crux of the whole generator. Everything downstream
@@ -46,6 +48,12 @@ export interface LotFrontage {
   outward: Vec2;
   cls: RoadClass;
   roadWidth: number;
+  /**
+   * The road edge this frontage belongs to, or null for a private lane. Two
+   * lots sharing this id are on the same stretch of the same street, which is
+   * the only way anything downstream can tell that they should line up.
+   */
+  roadEdgeId: number | null;
   /** Midpoint of the frontage edge. */
   mid: Vec2;
 }
@@ -64,7 +72,15 @@ export interface Lot {
   isFlagLot: boolean;
   poleCorridor: Polygon | null;
   clusterId: number;
+  /**
+   * What the lot is used for. Mutated to 'vacant' by the mesh builder when no
+   * building could be fitted, so `zonedKind` keeps what the zoning decided.
+   */
   kind: LotKind;
+  /** The use zoning assigned, before any failure to build on it. */
+  zonedKind: LotKind;
+  /** Why the lot is empty, when it is. Null on a lot that carries a building. */
+  vacancyReason: VacancyReason | null;
   urbanity: number;
 }
 
@@ -92,6 +108,7 @@ interface FrontRef {
   inward: Vec2;
   cls: RoadClass;
   roadWidth: number;
+  roadEdgeId: number | null;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -138,16 +155,59 @@ export function subdivideBlock(
       inward: e.normal,
       cls: e.cls,
       roadWidth: e.roadWidth,
+      roadEdgeId: e.roadEdgeId,
     });
   }
 
-  if (fronts.length === 0) return [];
-  const interior = differencePoly([block.polygon], roadStrips);
-  const inner = largest(interior);
-  if (!inner || area(inner) < cfg.minLotArea) return [];
+  // Dead-end streets inside the block. They are drawn like any other street, so
+  // their right of way has to come off the block like any other street's — and
+  // then both sides of them front lots, which is the whole point of a
+  // 行き止まり: the houses along it are why it was built.
+  for (const r of block.interiorRoads) {
+    const half = r.width / 2 + cfg.gutterWidth;
+    const dir = V.normalize(V.sub(r.b, r.a));
+    const side = V.perp(dir);
+    // Extended at the open end only. The closed end stops where the asphalt
+    // does; running past it would take land off lots the street never reaches.
+    const a = V.addScaled(r.a, dir, -half);
+    const b = V.addScaled(r.b, dir, half);
+    roadStrips.push([
+      V.addScaled(a, side, -half),
+      V.addScaled(b, side, -half),
+      V.addScaled(b, side, half),
+      V.addScaled(a, side, half),
+    ]);
+    for (const sign of [1, -1]) {
+      fronts.push({
+        a: V.addScaled(r.a, side, sign * half),
+        b: V.addScaled(r.b, side, sign * half),
+        dir,
+        // Inward means away from the street, into the land behind it.
+        inward: V.scale(side, sign),
+        cls: r.cls,
+        roadWidth: r.width,
+        roadEdgeId: r.roadEdgeId,
+      });
+    }
+  }
 
-  const parcels = subdivideInterior(inner, fronts, cfg, rng, net, 0);
-  return finaliseLots(parcels, block, fronts, cfg, idOffset);
+  if (fronts.length === 0) return [];
+
+  // Every part, not just the largest. Taking a street's right of way out of a
+  // block can leave two pieces — an interior dead end makes a C, and a lane cut
+  // across a corner makes a wedge — and keeping only the bigger one threw the
+  // other away as bare ground.
+  const parcels: Parcel[] = [];
+  for (const inner of differencePoly([block.polygon], roadStrips)) {
+    if (area(inner) < cfg.minLotArea) continue;
+    // Only the frontages this piece actually touches; a reference on the far
+    // side of the street would have the piece set back for a road it does not
+    // reach, and then sliced perpendicular to a street it cannot see.
+    const own = fronts.filter((f) => touchesFront(inner, f));
+    if (own.length === 0) continue;
+    parcels.push(...subdivideInterior(inner, own, cfg, rng, net, 0));
+  }
+  return finaliseLots(parcels, block, fronts, cfg, idOffset, net);
 }
 
 /**
@@ -220,7 +280,16 @@ function subdivideInterior(
   let laneBuilt = false;
 
   if (core && canRecurse && coreArea >= cfg.minCoreArea) {
-    const lane = tryPrivateLane(core, inner, ordered, cfg, rng);
+    const candidate = tryPrivateLane(core, inner, ordered, cfg, rng);
+    // `inner` only has the *bounding* roads subtracted from it. A dead-end
+    // street is pruned from the face walk, so it lies inside the block with
+    // nothing to mark it, and a corridor driven toward the core can run
+    // straight along it. Nothing here can move the road, so drop the lane and
+    // let the core become 旗竿地 instead.
+    const lane =
+      candidate && laneClears(net, candidate.from, candidate.to, cfg.privateLaneWidth, 2)
+        ? candidate
+        : null;
     if (lane) {
       laneBuilt = true;
       net.privateLanes.push({ a: lane.from, b: lane.to, width: cfg.privateLaneWidth });
@@ -414,6 +483,10 @@ function laneFrontRefs(lane: PrivateLane, cfg: LotParams): FrontRef[] {
       inward: V.scale(side, sign),
       cls: 'private',
       roadWidth: cfg.privateLaneWidth,
+      // A lane is not in the road graph, so it has no edge to point at. Both of
+      // its sides still share this one reference, which is what keeps the two
+      // facing rows of houses parallel to each other.
+      roadEdgeId: null,
     };
   };
   return [mk(1), mk(-1)];
@@ -547,17 +620,103 @@ function longestExtentAxis(poly: Polygon): Vec2 {
  * Repair pass, then build the public `Lot` records: merge undersized parcels,
  * drop unbuildable slivers, and recompute frontage for every survivor.
  */
+/**
+ * Take back any road surface a parcel has ended up covering.
+ *
+ * Every stage upstream is *supposed* to keep lots off the asphalt — the block
+ * boundary is set back, interior dead ends have their own right of way removed,
+ * lanes are trimmed. Each of those is a separate mechanism with its own way of
+ * failing quietly: an unattributed block edge gets no setback at all, a
+ * `mergeCollinear` merge applies one road's width along another's, and
+ * `differencePoly` returns its subject unchanged when the clipper throws, which
+ * hands back a block with no right of way taken off it whatsoever.
+ *
+ * A lot containing public road is wrong however it got there, so it is checked
+ * once, here, against the same rectangles the renderer actually draws rather
+ * than against what the subdivider intended. A correctly-placed lot is already
+ * a gutter's width clear of the kerb and loses nothing.
+ */
+function clipToRoads(poly: Polygon, net: RoadNetwork, cfg: LotParams): Polygon | null {
+  let box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+  for (const p of poly) {
+    box = {
+      minX: Math.min(box.minX, p.x),
+      minY: Math.min(box.minY, p.y),
+      maxX: Math.max(box.maxX, p.x),
+      maxY: Math.max(box.maxY, p.y),
+    };
+  }
+
+  const strips: Polygon[] = [];
+  const add = (a: Vec2, b: Vec2, width: number) => {
+    // A hair narrower than the right of way the parcel was set back by, so a
+    // correctly-placed boundary and the strip beside it are not exactly
+    // collinear. Coincident edges are what polygon clippers are worst at: on
+    // the axis-aligned grid layout every lot line lay exactly on a strip edge,
+    // the clipper threw, and the retry across all four quanta turned a one
+    // second subdivision into thirteen.
+    const half = width / 2 + cfg.gutterWidth - 0.02;
+    if (
+      Math.max(a.x, b.x) + half < box.minX ||
+      Math.min(a.x, b.x) - half > box.maxX ||
+      Math.max(a.y, b.y) + half < box.minY ||
+      Math.min(a.y, b.y) - half > box.maxY
+    ) {
+      return;
+    }
+    // Nothing to subtract unless the road actually reaches this parcel. Bounding
+    // boxes are far too generous for a diagonal road, and every strip kept here
+    // costs a boolean.
+    const near =
+      poly.some((q) => V.distToSegment(q, a, b) < half) ||
+      polyEdges(poly).some((e) => V.segmentDistance(e.a, e.b, a, b) < half);
+    if (!near) return;
+    const d = V.sub(b, a);
+    const l = V.len(d);
+    if (l < 0.2) return;
+    const dir = V.scale(d, 1 / l);
+    const n = V.perp(dir);
+    // Cover the junction overshoot the renderer adds, so a lot cannot be left
+    // holding the corner of asphalt that spills past a node.
+    const a2 = V.addScaled(a, dir, -half);
+    const b2 = V.addScaled(b, dir, half);
+    strips.push([
+      V.addScaled(a2, n, -half),
+      V.addScaled(b2, n, -half),
+      V.addScaled(b2, n, half),
+      V.addScaled(a2, n, half),
+    ]);
+  };
+
+  for (const e of net.edges) add(net.graph.node(e.a).p, net.graph.node(e.b).p, e.width);
+  for (const lane of net.privateLanes) add(lane.a, lane.b, lane.width);
+  if (strips.length === 0) return poly;
+
+  const before = area(poly);
+  const clipped = largest(differencePoly([poly], strips));
+  // Losing nearly everything means the parcel *was* the road — land the
+  // subdivider had no business handing out. Nothing is salvageable, so refuse
+  // it outright rather than keep the original and build a house in the
+  // carriageway. (A failed `differencePoly` looks nothing like this: it returns
+  // the subject unchanged, so the area is undiminished.)
+  if (!clipped || area(clipped) < before * 0.05) return null;
+  return clipped;
+}
+
 function finaliseLots(
   parcels: Parcel[],
   block: Block,
   blockFronts: FrontRef[],
   cfg: LotParams,
   idOffset: number,
+  net: RoadNetwork,
 ): Lot[] {
   const kept: { parcel: Parcel; frontages: LotFrontage[] }[] = [];
 
   const accept = (p: Parcel, depth = 0): void => {
-    const cleaned = cleanPolygon(p.polygon, { tolerance: 0.04, minEdge: 0.2, minArea: 1 });
+    const onLand = clipToRoads(p.polygon, net, cfg);
+    if (!onLand) return;
+    const cleaned = cleanPolygon(onLand, { tolerance: 0.04, minEdge: 0.2, minArea: 1 });
     if (!cleaned) return;
 
     // Subtracting two road strips that meet at a block corner can pinch the
@@ -622,6 +781,8 @@ function finaliseLots(
       poleCorridor: p.poleCorridor,
       clusterId: -1,
       kind: 'house',
+      zonedKind: 'house',
+      vacancyReason: null,
       urbanity: 0,
     });
   }
@@ -650,16 +811,29 @@ function computeFrontages(poly: Polygon, fronts: FrontRef[], cfg: LotParams): Lo
       if (!best || d < best.d) best = { f, d };
     }
     if (!best) continue;
+    // Take the direction from the *street*, not from this lot's own edge.
+    //
+    // The two differ by a fraction of a degree — the lot boundary has been
+    // through cleaning, simplification and a boolean or two since it was cut
+    // off the block — but that fraction is what decides which way the house
+    // points, and it differs for every lot on the street. Reading it off the
+    // shared reference instead makes every house on one street segment face
+    // exactly the same way, which is what a row of them looks like in life.
+    const streetward = V.neg(best.f.inward);
+    // The reference is shared by both sides of a lane, so orient it by this
+    // lot's own outward normal rather than trusting its stored sign.
+    const outward = V.dot(V.neg(e.normal), streetward) < 0 ? V.neg(streetward) : streetward;
+    const dir = V.dot(e.dir, V.perp(outward)) < 0 ? V.neg(V.perp(outward)) : V.perp(outward);
     out.push({
       i: e.i,
       a: e.a,
       b: e.b,
       len: e.len,
-      dir: e.dir,
-      // Polygon edge normals point inward, so the street is the other way.
-      outward: V.neg(e.normal),
+      dir,
+      outward,
       cls: best.f.cls,
       roadWidth: best.f.roadWidth,
+      roadEdgeId: best.f.roadEdgeId,
       mid,
     });
   }

@@ -28,7 +28,15 @@ import {
 } from '../geom/obb.js';
 import { projectionRoom } from './mass.js';
 import type { Lot } from '../city/Lots.js';
-import type { BuildEnvelope, BuildingSpec, Footprint, SlantPlane, Wall, WallRole } from './types.js';
+import type {
+  BuildEnvelope,
+  BuildingSpec,
+  Footprint,
+  SlantPlane,
+  VacancyReason,
+  Wall,
+  WallRole,
+} from './types.js';
 
 /**
  * Buildable envelope and footprint fitting.
@@ -55,6 +63,117 @@ import type { BuildEnvelope, BuildingSpec, Footprint, SlantPlane, Wall, WallRole
 
 /** Snap to the 910 mm half-ken module — the dimensional grid Japanese houses use. */
 const snapModule = (v: number, module: number): number => Math.max(module, Math.round(v / module) * module);
+
+/**
+ * A corner sharper than this is a wedge rather than a corner, and gets cut back.
+ * Around one building in forty has one, so this touches very little.
+ */
+const SHARP_CORNER = 45 * DEG;
+
+/**
+ * Narrowest strip of plan worth keeping, in modules.
+ *
+ * A corner is cut back to where the building is two modules — one 1.82 m bay —
+ * across, because below that there is no room behind the wall. And a plan that
+ * never reaches 2.7 modules anywhere is a corridor rather than a house, so the
+ * parcel is left empty on purpose and says `too-narrow`.
+ *
+ * 2.7 is not a new judgement: it is `module * 1.35` doubled, the radius the
+ * conforming route has always demanded. What is new is that the *clip* route is
+ * now held to it as well — it is the route that produces awkward shapes, and it
+ * was the one with no width test at all. Tightening it further is tempting and
+ * costs real houses: at three modules the town loses another nineteen parcels to
+ * vacancy, and a 2.46 m house is narrow but it is a house.
+ */
+const MIN_CORNER_WIDTH_MODULES = 2;
+const MIN_PLAN_WIDTH_MODULES = 2.7;
+
+/**
+ * Cut the needles off a plan.
+ *
+ * The composed mass is clipped against the buildable area, and the two meet at
+ * whatever angle the parcel happens to have — so the clip regularly leaves a
+ * hairline fin, in the worst case a ring that doubles back on itself at 1.4° and
+ * draws as a razor blade sticking out of the house. `cleanPolygon` cannot see
+ * these: both of a spike's edges are long, so `minEdge` keeps them, and the turn
+ * at its tip is nearly 180°, so `maxTurn` keeps them too. They are only
+ * recognisable as *sharp corners*, and the fix is to cut each one back to where
+ * the plan is a room's width across.
+ *
+ * Done as vertex surgery rather than by clipping a half-plane off the corner —
+ * which is what `chamferAcuteCorners` does and why it cannot handle the bad
+ * cases. On a 1.4° corner the cutting plane lies 60 m from the apex and takes
+ * the entire building with it, so that routine has to refuse the cut whenever it
+ * would reach past a neighbouring wall; the needles are exactly the corners it
+ * refuses. Moving the vertex instead is local by construction, and since it only
+ * ever removes area the result cannot escape the buildable area it came from.
+ */
+function trimSharpCorners(poly: Polygon, minWidth: number): Polygon | null {
+  let out = poly;
+  // Corners whose surgery would make the ring cross itself. Abandoning the whole
+  // trim over one of them would leave every *other* needle on the plan in place.
+  const skip = new Set<string>();
+
+  // One cut per pass, sharpest first, rescanning afterwards: a cut renumbers the
+  // ring, and it leaves the corner blunter than the threshold, so this ends.
+  for (let pass = 0; pass < 8; pass++) {
+    const n = out.length;
+    if (n < 3) return null;
+
+    let idx = -1;
+    let theta = SHARP_CORNER;
+    for (let i = 0; i < n; i++) {
+      const prev = out[(i - 1 + n) % n]!;
+      const v = out[i]!;
+      const next = out[(i + 1) % n]!;
+      // Rings are CCW, so only a left turn is a convex corner. A reflex vertex
+      // is an inside corner and has no needle behind it.
+      if (V.cross(V.sub(v, prev), V.sub(next, v)) <= 0) continue;
+      if (skip.has(key(v))) continue;
+      const a = V.sub(prev, v);
+      const b = V.sub(next, v);
+      if (V.len(a) < 1e-6 || V.len(b) < 1e-6) continue;
+      const t = V.angleBetween(a, b);
+      if (t < theta) {
+        theta = t;
+        idx = i;
+      }
+    }
+    if (idx < 0) return out;
+
+    const prev = out[(idx - 1 + n) % n]!;
+    const v = out[idx]!;
+    const next = out[(idx + 1) % n]!;
+    const a = V.sub(prev, v);
+    const b = V.sub(next, v);
+    // Distance from the apex at which the wedge first measures `minWidth` across.
+    const t = minWidth / (2 * Math.tan(theta / 2));
+
+    // Past the end of one of its own edges the corner is not a corner at all but
+    // a fin doubling back on the wall behind it. Dropping the apex merges its two
+    // edges into the one wall they were always pretending to be. Try both, so a
+    // chamfer that would self-cross still gets the fin off the plan.
+    const chamfer: Polygon = [
+      ...out.slice(0, idx),
+      V.addScaled(v, V.normalize(a), t),
+      V.addScaled(v, V.normalize(b), t),
+      ...out.slice(idx + 1),
+    ];
+    const drop: Polygon = out.filter((_, k) => k !== idx);
+    const order = t >= V.len(a) * 0.98 || t >= V.len(b) * 0.98 ? [drop, chamfer] : [chamfer, drop];
+
+    const ring = order.find((r) => r.length >= 3 && isSimple(r));
+    if (!ring) {
+      skip.add(key(v));
+      continue;
+    }
+    out = ring;
+  }
+  return out;
+}
+
+/** Identity for a vertex across the re-indexing a cut causes, to a millimetre. */
+const key = (p: Vec2): string => `${Math.round(p.x * 1000)},${Math.round(p.y * 1000)}`;
 
 export function computeEnvelope(
   lot: Lot,
@@ -132,8 +251,19 @@ export function computeEnvelope(
 
   if (buildable) buildable = cleanPolygon(buildable, { tolerance: 0.05, minEdge: 0.25, minArea: 4 });
 
+  // Say why there is nothing here, so the lot does not become an unexplained
+  // hole in the block. `buildable-too-small` is deliberately distinguished from
+  // `no-buildable-area`: the first is a scrap of land, the second means the
+  // setbacks consumed a parcel that looked perfectly ordinary.
+  const reason: VacancyReason | null = !buildable
+    ? 'no-buildable-area'
+    : area(buildable) < params.minFloorArea * 0.5
+      ? 'buildable-too-small'
+      : null;
+
   return {
     buildable,
+    reason,
     maxCoverage: spec.coverage,
     maxFAR: spec.far,
     absoluteHeightLimit: spec.heightLimit,
@@ -275,14 +405,165 @@ function composeShape(
   }
 }
 
+/**
+ * The shallowest stretch of building behind any wall of a plan.
+ *
+ * A needle is a sharp corner and `trimSharpCorners` finds it by its angle, but
+ * the other two ways a plan goes thin have no sharp corner to find. A wedge
+ * truncated by a 70 cm edge — 27 m long, tapering from 4.3 m to nothing — turns
+ * every corner at a decent angle. And the wall insets that bring a conforming
+ * outline down to its coverage limit can leave two walls five centimetres apart,
+ * which is a hairline crack down the side of the house. Both are only visible as
+ * *how much building there is behind a wall*, which is what this measures: cast
+ * inward from three points along each wall and take the worst first crossing.
+ */
+function wallDepth(poly: Polygon): number {
+  const es = polyEdges(poly);
+  let worst = Infinity;
+  for (const e of es) {
+    for (let s = 1; s <= 3; s++) {
+      // Start just inside the wall, or the ray leaves through its own edge.
+      const p = V.addScaled(V.lerp(e.a, e.b, s / 4), e.normal, 1e-4);
+      const far = V.addScaled(p, e.normal, 200);
+      let hit = Infinity;
+      for (const o of es) {
+        if (o.i === e.i) continue;
+        const x = V.segmentIntersection(p, far, o.a, o.b);
+        if (x) hit = Math.min(hit, V.dist(p, x.point));
+      }
+      worst = Math.min(worst, hit);
+    }
+  }
+  return worst;
+}
+
+/**
+ * Remove every part of a plan thinner than `2·r` — a morphological opening,
+ * clipped back to the original so the result can only ever lose area.
+ *
+ * This is the general form of what `trimSharpCorners` does locally, and it is
+ * reached only for the one plan in twenty that needs it.
+ *
+ * The dilation puts a *square* on each vertex of the core rather than a disc,
+ * oriented to the building's own frame. A round join stops 0.41·r short of a
+ * square corner, so opening an ordinary house with round joins files 37 cm off
+ * each of its corners and leaves a fan of 40 cm wall panels behind — sixteen
+ * walls on a plan that had six, several of them too short for the façade grammar
+ * to put anything on, including the front door. A frame-aligned square reaches
+ * the corner exactly, so a frame-aligned plan comes back byte for byte, and
+ * anywhere it over-reaches the final clip against `poly` puts it back.
+ *
+ * Every boolean below fails *open* — `differencePoly` hands back its subject
+ * unchanged and `intersectPoly` returns nothing — so the result is verified
+ * against what an opening can possibly do rather than trusted.
+ */
+function openPlan(poly: Polygon, r: number, frame: Frame): Polygon | null {
+  const core = offsetInward(poly, r);
+  if (core.length === 0) return null;
+
+  const ax = V.scale(frame.xAxis, r);
+  const ay = V.scale(V.perp(frame.xAxis), r);
+  const parts: Polygon[] = [];
+  for (const c of core) {
+    parts.push(c);
+    for (const e of polyEdges(c)) {
+      const out = V.neg(e.normal);
+      parts.push([e.a, e.b, V.addScaled(e.b, out, r), V.addScaled(e.a, out, r)]);
+    }
+    for (const p of c) {
+      parts.push([
+        V.sub(V.sub(p, ax), ay),
+        V.sub(V.add(p, ax), ay),
+        V.add(V.add(p, ax), ay),
+        V.add(V.sub(p, ax), ay),
+      ]);
+    }
+  }
+
+  const grown = unionPoly(parts);
+  if (grown.length === 0) return null;
+  const kept = largest(intersectPoly(grown, [poly]));
+  if (!kept || area(kept) > area(poly) + 1e-6) return null;
+  return kept;
+}
+
+/**
+ * The last word on whether a plan is a building, shared by both routes so that
+ * "too thin to be a room" means one thing rather than two.
+ *
+ * It used to mean two. The conforming route rejected a plan that held no circle
+ * 2.5 m across — "a building here would be a corridor, not a house" — while the
+ * compose-and-clip route had no width test whatever, so it was perfectly willing
+ * to return a house 15.4 m long and 1.8 m deep. The clip is the route that
+ * *produces* awkward shapes, so it was the one that needed the check.
+ */
+function finishOutline(
+  poly: Polygon,
+  within: Polygon,
+  frame: Frame,
+  params: BuildingParams,
+): Polygon | null {
+  // Wide enough to be rooms, and big enough to be a house. A plan that fails
+  // either is not one, and the parcel is left empty saying `too-narrow`.
+  const usable = (p: Polygon): boolean =>
+    area(p) >= params.minFloorArea &&
+    maxInscribedCircle(p, 0.25).radius >= (params.module * MIN_PLAN_WIDTH_MODULES) / 2;
+
+  // Cleaned first, and only then trimmed. The other way round, the clip back
+  // against the envelope that `cleanFootprintWithin` performs puts a chamfered
+  // corner straight back — which is why the sharpest corner in the town stayed
+  // at 7° with the trim apparently running on every plan.
+  const base = cleanFootprintWithin(poly, within, params);
+  if (!base) return null;
+  const trimmed = trimSharpCorners(base, params.module * MIN_CORNER_WIDTH_MODULES);
+  // The trim only ever removes area, so the result cannot escape the envelope
+  // and needs no second clip — just the tidy-up for the edges the cuts leave.
+  let out = (trimmed && trimmed !== base ? cleanFootprint(trimmed, params) : base) ?? base;
+  if (!usable(out)) return null;
+
+  // A wedge truncated by a short edge, or a hairline crack between two walls the
+  // coverage inset pushed together — neither has a sharp corner to cut, and only
+  // these pay for the opening. It runs *after* the judgement above rather than
+  // before, because eroding a plan that was never wide enough empties it, and
+  // reading that as "the repair failed" is how a cosmetic step ends up deciding
+  // which parcels get a building. Here it can only ever improve one.
+  if (wallDepth(out) < params.module * MIN_CORNER_WIDTH_MODULES) {
+    // As much erosion as the plan can stand. A full module removes everything
+    // narrower than 1.82 m, but on a plan barely over the width floor it removes
+    // the plan — and a repair that empties its own input just declines, leaving
+    // the thin part in place. Sizing it to the widest circle the plan holds means
+    // the two smallest houses in the town still get the treatment, in proportion.
+    const r = Math.min(params.module, maxInscribedCircle(out, 0.25).radius * 0.6);
+    const opened = openPlan(out, r, frame);
+    // Trimmed again on the way out: the square joins meet the original walls at
+    // whatever angle they like, and left alone the repair reintroduced a 0.3°
+    // needle of its own. Neither step ever adds area, so this needs no second
+    // clip against the envelope — only the tidy-up.
+    const trimmedOpen = opened ? (trimSharpCorners(opened, params.module * MIN_CORNER_WIDTH_MODULES) ?? opened) : null;
+    const settled = trimmedOpen ? cleanFootprint(trimmedOpen, params) : null;
+    if (settled && usable(settled)) out = settled;
+  }
+  return out;
+}
+
+/** Filled in when the fit fails, so the caller can say why the lot is empty. */
+export interface FitDiagnostics {
+  reason: VacancyReason | null;
+}
+
 export function fitFootprint(
   lot: Lot,
   envelope: BuildEnvelope,
   spec: BuildingSpec,
   params: BuildingParams,
+  diag?: FitDiagnostics,
 ): Footprint | null {
   const buildable = envelope.buildable;
-  if (!buildable) return null;
+  if (!buildable) {
+    if (diag) diag.reason = envelope.reason ?? 'no-buildable-area';
+    return null;
+  }
+  if (diag) diag.reason = envelope.reason ?? 'no-footprint-fits';
   const rng = makeRng(subSeed(lot.seed, 'footprint'));
 
   // 1. Orientation. Buildings face the street; only the jitter is random.
@@ -313,8 +594,16 @@ export function fitFootprint(
   const candidateFrames: Frame[] = [frameRotated];
   const lotObb = minAreaObb(buildable);
   for (const axis of [lotObb.frame.xAxis, V.perp(lotObb.frame.xAxis)]) {
-    // Only consider a lot-aligned frame if it still roughly faces the street.
-    if (Math.abs(V.dot(axis, frameRotated.xAxis)) > 0.55) {
+    // Only consider a lot-aligned frame if it still faces the street.
+    //
+    // This threshold is the single largest influence on whether a street reads
+    // as a street. `workFrame` below — not `spec.facingAngle` — is what actually
+    // orients the composed footprint, so admitting a frame here admits a house
+    // rotated that far off the frontage. The old value of 0.55 allowed 56.6°,
+    // which meant a lot whose side boundaries had been skewed by
+    // `cutAngleJitter` could turn its house most of the way to sideways-on,
+    // even on a perfectly square grid.
+    if (Math.abs(V.dot(axis, frameRotated.xAxis)) > params.frameAlignMin) {
       candidateFrames.push({ origin: frame.origin, xAxis: axis });
     }
   }
@@ -326,11 +615,18 @@ export function fitFootprint(
   );
 
   const workFrame = best?.frame ?? frameRotated;
-  let conformTried = false;
+  // Memoised rather than single-shot. It used to refuse a second call outright,
+  // which made the final fallback at the end of this function dead code for
+  // exactly the lots that needed it most — any parcel odd enough to try
+  // conforming early and fail was then denied the last-chance attempt.
+  let conformed: Footprint | null | undefined;
   const conform = (): Footprint | null => {
-    if (conformTried || !params.conformIrregular) return null;
-    conformTried = true;
-    return conformFootprint(buildable, lot, spec, params, workFrame, rng);
+    if (!params.conformIrregular) return null;
+    if (conformed === undefined) {
+      conformed = conformFootprint(buildable, lot, spec, params, workFrame, rng);
+      if (!conformed && diag) diag.reason = 'too-narrow';
+    }
+    return conformed;
   };
 
   // No rectangle fits at all — a sliver barely wider than the raster cell.
@@ -407,11 +703,13 @@ export function fitFootprint(
     // ★ The key step: clip the composed mass to the buildable area.
     const clippedParts = intersectPoly(composed, [buildable]);
     const outline = largest(clippedParts);
+    let tooSmall = true;
     if (outline) {
       const outArea = area(outline);
       if (outArea >= params.minFloorArea) {
-        const cleaned = cleanFootprintWithin(outline, buildable, params);
-        if (cleaned && area(cleaned) >= params.minFloorArea) {
+        tooSmall = false;
+        const cleaned = finishOutline(outline, buildable, workFrame, params);
+        if (cleaned) {
           const clippedFraction = composedArea > 0 ? 1 - outArea / composedArea : 0;
           return {
             outline: cleaned,
@@ -420,12 +718,36 @@ export function fitFootprint(
             clipped: clippedFraction > 0.005,
             clippedFraction,
             conform: false,
-            walls: classifyWalls(cleaned, lot, spec),
+            walls: classifyWalls(cleaned, lot, spec, params.module),
             area: area(cleaned),
           };
         }
+        // Big enough, but a corridor or all needle. Shrinking cannot widen it —
+        // 0.92 of a ribbon is a shorter ribbon — so drop to a plain rectangle,
+        // which claims the fattest part of an awkward parcel, and failing that
+        // hand over to the conforming route.
+        if (shape !== 'rect') {
+          shape = 'rect';
+          scale = 1;
+          continue;
+        }
+        if (diag) diag.reason = 'too-narrow';
+        break;
       }
     }
+
+    // Shrinking answers "the mass overhangs the buildable area". It cannot
+    // answer "what survived the clip is too small" — that failure only gets
+    // worse at 0.92 the size, which used to burn four of the eight attempts
+    // making the outcome less likely each time. Go straight to the shape
+    // relaxation instead: a plain rectangle claims more of an awkward parcel
+    // than an L or a U does.
+    if (tooSmall && shape !== 'rect') {
+      shape = 'rect';
+      scale = 1;
+      continue;
+    }
+    if (tooSmall) break;
 
     scale *= 0.92;
     // Relax to a plain rectangle before giving up entirely.
@@ -481,13 +803,12 @@ function conformFootprint(
   );
   const sized = shrinkToArea(chamfered, target, lot.faceDir);
 
-  const cleaned = cleanFootprintWithin(sized, buildable, params);
-  if (!cleaned || area(cleaned) < params.minFloorArea) return null;
   // A long enough ribbon clears the minimum floor area while being a metre
-  // wide — a wall, not a building. The rectangle path can't produce one because
-  // it floors both sides at three modules; this is the equivalent guard, and a
-  // parcel that fails it is better left empty than built on.
-  if (maxInscribedCircle(cleaned, 0.25).radius < params.module * 1.35) return null;
+  // wide — a wall, not a building — and a wedge left between two streets ends in
+  // a needle. A parcel that cannot hold anything better is left empty on
+  // purpose, which is what `too-narrow` records.
+  const cleaned = finishOutline(sized, buildable, frame, params);
+  if (!cleaned) return null;
 
   // This outline was not composed from rectangles, so there is no span for a
   // ridge to sit over. 片流れ is exact on any polygon — as is 陸屋根 — and both
@@ -521,7 +842,7 @@ function conformFootprint(
     clipped: true,
     clippedFraction: 0,
     conform: true,
-    walls: classifyWalls(cleaned, lot, spec),
+    walls: classifyWalls(cleaned, lot, spec, params.module),
     area: area(cleaned),
   };
 }
@@ -710,7 +1031,7 @@ function cleanFootprint(poly: Polygon, params: BuildingParams): Polygon | null {
  * that from real world orientation rather than at random is a cheap, strong
  * authenticity signal.
  */
-function classifyWalls(outline: Polygon, lot: Lot, spec: BuildingSpec): Wall[] {
+function classifyWalls(outline: Polygon, lot: Lot, spec: BuildingSpec, module: number): Wall[] {
   const walls: Wall[] = [];
 
   // The corridor goes on the wall that faces furthest from south, i.e. the one
@@ -736,6 +1057,8 @@ function classifyWalls(outline: Polygon, lot: Lot, spec: BuildingSpec): Wall[] {
     }
   }
 
+  const entranceIdx = chooseEntrance(raw, lot, spec, module);
+
   for (let i = 0; i < raw.length; i++) {
     const r = raw[i]!;
     walls.push({
@@ -748,9 +1071,79 @@ function classifyWalls(outline: Polygon, lot: Lot, spec: BuildingSpec): Wall[] {
       role: r.role,
       sunFacing: r.sun > 0.4,
       isCorridorSide: spec.hasExteriorCorridor && i === corridorIdx && r.e.len > 4,
+      isEntrance: i === entranceIdx,
     });
   }
   return walls;
+}
+
+/**
+ * Which wall the front door goes on — one wall, chosen for the building.
+ *
+ * The rule used to be "any wall whose outward normal is within 57° of the
+ * street", applied independently per wall, which is three separate mistakes:
+ * a building with two street-facing walls got two front doors, a wall that
+ * pointed streetward from four metres back behind the parking space counted as
+ * much as the one on the street, and a house whose frontage had been clipped
+ * down to a metre and a half got no door at all because that wall was too short
+ * to divide into bays.
+ *
+ * `aim` answers the user's actual requirement — the entrance faces the road *or*
+ * the parking space — and `reach` breaks the tie in favour of the wall nearest
+ * the street, which is where a 玄関 is. Length only breaks near-ties, so a short
+ * wall squarely on the street still beats a long one facing the neighbours; the
+ * façade builder narrows its margins to fit a door on whatever this returns.
+ */
+function chooseEntrance(
+  raw: { e: { a: Vec2; b: Vec2; len: number }; outward: Vec2; role: WallRole }[],
+  lot: Lot,
+  spec: BuildingSpec,
+  module: number,
+): number {
+  if (spec.kind === 'apart') return -1; // Unit doors on the corridor are the entrances.
+  const front = lot.frontages[0];
+  if (!front) return -1;
+
+  let best = -1;
+  let bestScore = -Infinity;
+  for (let i = 0; i < raw.length; i++) {
+    const r = raw[i]!;
+    const mid = V.lerp(r.e.a, r.e.b, 0.5);
+    // Facing the street, or facing the car standing on the parking space.
+    let aim = V.dot(r.outward, lot.faceDir);
+    if (spec.carPadAt) {
+      const toPad = V.sub(spec.carPadAt, mid);
+      const d = V.len(toPad);
+      if (d > 0.5) aim = Math.max(aim, V.dot(r.outward, V.scale(toPad, 1 / d)));
+    }
+    if (aim < 0.25) continue; // More than 75° from both: a door here faces nothing.
+    // A 910 mm door needs 910 mm of wall. Without this the best-aimed candidate
+    // is regularly a 36 cm chamfer that happens to point straight at the road.
+    if (r.e.len < module) continue;
+    const reach = V.dot(V.sub(mid, front.mid), front.outward);
+    const score = aim + reach * 0.06 + Math.min(r.e.len, 6) * 0.02;
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  }
+
+  // Nothing faces the street at all, or nothing that does is wide enough for a
+  // door — a plan clipped into a shape that turns its back on the road. Better a
+  // door on the least wrong wall than a house with no way in, which is what this
+  // used to produce.
+  if (best < 0) {
+    let far = -Infinity;
+    for (let i = 0; i < raw.length; i++) {
+      const r = raw[i]!;
+      const d = V.dot(V.sub(V.lerp(r.e.a, r.e.b, 0.5), front.mid), front.outward) + r.e.len * 0.1;
+      if (d > far) {
+        far = d;
+        best = i;
+      }
+    }
+  }
+  return best;
 }
 
 /** Local-frame coordinates of a world point, for callers that need them. */

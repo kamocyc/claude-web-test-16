@@ -195,7 +195,10 @@ describe('building geometry', () => {
     for (const b of built.filter((x) => x.footprint.conform)) {
       const lotEdges = b.lot.polygon.length;
       let parallel = 0;
+      let total = 0;
       for (const w of b.footprint.walls) {
+        const wallLen = Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
+        total += wallLen;
         for (const e of b.lot.polygon.map((_, i) => i)) {
           const a = b.lot.polygon[e]!;
           const c = b.lot.polygon[(e + 1) % lotEdges]!;
@@ -204,14 +207,18 @@ describe('building geometry', () => {
           if (l < 0.5) continue;
           const align = Math.abs((w.dir.x * dir.x + w.dir.y * dir.y) / l);
           if (align > 0.985) {
-            parallel++;
+            parallel += wallLen;
             break;
           }
         }
       }
-      // Chamfers and the shrink's own cuts are not boundary-parallel, so this is
-      // a majority test rather than an all-walls one.
-      expect(parallel / b.footprint.walls.length, `lot ${b.lot.id}`).toBeGreaterThan(0.5);
+      // Measured by length, not by wall count. Chamfers and the shrink's own
+      // cuts are not boundary-parallel, and counting walls makes a chamfer worth
+      // as much as the wall it truncates: a quadrilateral lot with all four
+      // corners cut lands on exactly 4 of 8 walls, which is the intended output
+      // rather than a failure. A `conformCornerCut` is 1.2 m against walls of
+      // several metres, so by length the distinction is unambiguous.
+      expect(parallel / total, `lot ${b.lot.id}`).toBeGreaterThan(0.6);
     }
   });
 

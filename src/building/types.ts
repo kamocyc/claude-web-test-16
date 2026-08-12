@@ -105,8 +105,34 @@ export interface SlantPlane {
   slope: number;
 }
 
+/**
+ * Why a lot ended up with no building on it.
+ *
+ * A lot that cannot be built on used to be a `null` returned from somewhere
+ * deep in the footprint fitter and thrown away by the renderer, so a bald patch
+ * in the middle of a block had no explanation and no way to get one. These are
+ * the reasons, ordered from "the generator gave up" to "no building belongs
+ * here". Only the last two are legitimate outcomes.
+ */
+export type VacancyReason =
+  /** Setbacks, the flag-lot pole and the car pad between them left nothing. */
+  | 'no-buildable-area'
+  /** There is buildable land, but less than a room's worth of it. */
+  | 'buildable-too-small'
+  /** Every composed mass, at every scale, clipped away to less than a room. */
+  | 'no-footprint-fits'
+  /** Long and thin: a building here would be a corridor, not a house. */
+  | 'too-narrow'
+  /** The lot was not offered a building at all — a bug if it ever appears. */
+  | 'not-attempted';
+
+/** Reasons that represent land genuinely not worth building on. */
+export const UNAVOIDABLE_VACANCY: readonly VacancyReason[] = ['too-narrow', 'buildable-too-small'];
+
 export interface BuildEnvelope {
   buildable: Polygon | null;
+  /** Set when `buildable` is null or unusably small; null when it is fine. */
+  reason: VacancyReason | null;
   maxCoverage: number;
   maxFAR: number;
   absoluteHeightLimit: number;
@@ -134,6 +160,17 @@ export interface Wall {
   sunFacing: boolean;
   /** The face carrying the exterior corridor, for apartments. */
   isCorridorSide: boolean;
+  /**
+   * The one wall carrying the front door.
+   *
+   * Chosen once for the whole building rather than decided wall by wall. The
+   * façade grammar used to put an entrance on *every* wall whose outward normal
+   * came within 57° of the street, which gave 28% of the houses two or three
+   * front doors and regularly put one on a wall several metres back from the
+   * street behind the parking space — while a house whose street-facing wall was
+   * a metre and a half long got none at all.
+   */
+  isEntrance: boolean;
   /**
    * How far anything may project from this wall before crossing the lot
    * boundary, metres. Balconies (1.0–2.1 m) and exterior corridors (1.1–1.8 m)

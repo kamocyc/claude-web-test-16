@@ -29,6 +29,8 @@ const OVERLAY_LAYERS: [OverlayLayer, string][] = [
   ['buildable', '建築可能領域'],
   ['footprints', 'フットプリント'],
   ['flagPoles', '旗竿地の竿'],
+  ['vacantUnavoidable', '空き地（やむを得ない）'],
+  ['vacantAvoidable', '空き地（要調査）'],
 ];
 
 export function createDebugUI(opts: DebugUIOptions): GUI {
@@ -67,7 +69,7 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   // --- Roads ---------------------------------------------------------------
   const fRoads = gui.addFolder('道路').close();
   fRoads
-    .add(params.roads, 'layout', { '有機的（歪んだ格子）': 'warped', '単純な格子＋斜め': 'grid' })
+    .add(params.roads, 'layout', { '地区型（区画整理の集合）': 'district', '単純な格子＋斜め': 'grid' })
     .name('街路のレイアウト')
     .onChange((v: RoadLayout) => {
       // A layout change moves several parameters at once, so refresh the
@@ -80,11 +82,14 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fRoads.add(params.roads, 'extent', 120, 600, 10).name('街の広さ');
   fRoads.add(params.roads, 'localSpacing', 25, 90, 1).name('区画街路の間隔');
   fRoads.add(params.roads, 'gridSpacingVariation', 0, 0.5, 0.01).name('格子間隔の変動(格子のみ)');
-  fRoads.add(params.roads, 'warpAmplitude1', 0, 40, 1).name('歪み(大)');
-  fRoads.add(params.roads, 'warpAmplitude2', 0, 15, 0.5).name('歪み(小)');
+  fRoads.add(params.roads, 'collectorSpacing', 120, 320, 10).name('地区の大きさ');
   fRoads.add(params.roads, 'deleteFraction', 0, 0.45, 0.01).name('街路の間引き率');
   fRoads.add(params.roads, 'deadEndFraction', 0, 0.4, 0.01).name('行き止まり率');
-  fRoads.add(params.roads, 'jogFraction', 0, 0.5, 0.01).name('食い違い交差率');
+  fRoads.add(params.roads, 'staggerFraction', 0, 0.6, 0.01).name('食い違い交差率');
+  fRoads.add(params.roads, 'districtAxisJitter', 0, 20, 0.5).name('地区の向きのばらつき(度)');
+  fRoads.add(params.roads, 'localBendAngle', 0, 10, 0.5).name('生活道路の曲がり(度)');
+  fRoads.add(params.roads, 'roadClearance', 0, 6, 0.1).name('道路間の最小空き');
+  fRoads.add(params.roads, 'minJunctionAngle', 15, 60, 1).name('最小交差角(度)');
   fRoads.add(params.roads, 'arterialCount', 0, 4, 1).name('幹線道路の本数');
 
   // --- Lots ----------------------------------------------------------------

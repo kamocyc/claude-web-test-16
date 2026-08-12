@@ -49,22 +49,22 @@ export function buildGround(city: City, params: CityParams, materials: MaterialL
   const kerb = new GeometryBuffer();
 
   /**
-   * `extendEnds` closes the gap at a junction by running the ribbon a little
-   * past its node. That is right for the road graph, where two ribbons meet at a
-   * shared node — and wrong for a private lane, whose ends are the exact extent
-   * of the land taken from the lots. Extending those pushed asphalt out over
-   * land a building was already standing on.
+   * `extend` closes the gap at a junction by running the ribbon a little past
+   * its node — but only where there is a second ribbon to close against. At a
+   * dead end, and at both ends of a private lane, the node *is* the extent of
+   * the land taken from the lots, and running past it puts asphalt over ground
+   * a house is standing on.
    */
-  const addRibbon = (a: Vec2, b: Vec2, width: number, extendEnds: boolean) => {
+  const addRibbon = (a: Vec2, b: Vec2, width: number, extend: { start: boolean; end: boolean }) => {
     const d = V.sub(b, a);
     const l = V.len(d);
     if (l < 0.2) return;
     const dir = V.scale(d, 1 / l);
     const n = V.perp(dir);
     const half = width / 2;
-    const over = extendEnds ? half * 0.9 : 0;
-    const a2 = V.addScaled(a, dir, -over);
-    const b2 = V.addScaled(b, dir, over);
+    const over = half * 0.9;
+    const a2 = V.addScaled(a, dir, extend.start ? -over : 0);
+    const b2 = V.addScaled(b, dir, extend.end ? over : 0);
 
     const quad = (inner: number, outer: number, y: number, buf: GeometryBuffer): void => {
       const p: Polygon = [
@@ -89,11 +89,28 @@ export function buildGround(city: City, params: CityParams, materials: MaterialL
     quad(-half, -half + gutter, 0.035, kerb);
   };
 
+  // How many roads meet at each node, so a ribbon knows whether there is
+  // anything at its end to close the gap against.
+  const degree = new Map<number, number>();
   for (const e of city.roads.edges) {
-    addRibbon(city.roads.graph.node(e.a).p, city.roads.graph.node(e.b).p, e.width, true);
+    degree.set(e.a, (degree.get(e.a) ?? 0) + 1);
+    degree.set(e.b, (degree.get(e.b) ?? 0) + 1);
+  }
+
+  for (const e of city.roads.edges) {
+    const a = city.roads.graph.node(e.a).p;
+    const b = city.roads.graph.node(e.b).p;
+    // The overshoot fills the corner where two ribbons meet. At a dead end
+    // there is no second ribbon and nothing to fill — the asphalt simply ran
+    // 0.45 of a carriageway past the last node, onto the lot behind it. The
+    // land there belongs to a house.
+    addRibbon(a, b, e.width, {
+      start: (degree.get(e.a) ?? 0) > 1,
+      end: (degree.get(e.b) ?? 0) > 1,
+    });
   }
   for (const lane of city.roads.privateLanes) {
-    addRibbon(lane.a, lane.b, lane.width, false);
+    addRibbon(lane.a, lane.b, lane.width, { start: false, end: false });
   }
 
   for (const [buf, family] of [

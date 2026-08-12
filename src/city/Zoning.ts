@@ -112,16 +112,16 @@ export function assignZoning(
       wideFrontage >= z.mansionMinFrontage &&
       lot.urbanity > z.mansionMinUrbanity
     ) {
-      lot.kind = 'mansion';
+      lot.kind = lot.zonedKind = 'mansion';
     } else if (
       lot.area >= z.apartMinArea &&
       bestFrontage.len >= z.apartMinFrontage &&
       lot.urbanity >= z.apartUrbanityLo &&
       lot.urbanity <= z.apartUrbanityHi
     ) {
-      lot.kind = 'apart';
+      lot.kind = lot.zonedKind = 'apart';
     } else {
-      lot.kind = 'house';
+      lot.kind = lot.zonedKind = 'house';
     }
   }
 

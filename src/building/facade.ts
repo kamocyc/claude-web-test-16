@@ -66,7 +66,9 @@ export function buildFacades(
 
     for (let w = 0; w < walls.length; w++) {
       const wall = walls[w]!;
-      if (wall.len < module * 1.2) {
+      // The entrance wall is exempt: a door is 910 mm wide and a wall that short
+      // still has to carry one, whereas an ordinary wall that short is a chamfer.
+      if (wall.len < module * 1.2 && !(wall.isEntrance && floor.index === 0)) {
         plainWall(bufs.wall, wall, floor, spec);
         continue;
       }
@@ -115,9 +117,19 @@ function layoutWall(
 ): BayKind[] {
   const module = params.module;
   // Reserve a corner return at each end — openings never run into a corner.
-  const margin = module * 0.6;
-  const usable = wall.len - margin * 2;
-  const slots = Math.floor(usable / module);
+  // The entrance wall gives up as much of that return as it needs to hold a
+  // single door, because the alternative is a house you cannot get into.
+  const entrance = wall.isEntrance && floor.index === 0;
+  let margin = module * 0.6;
+  let slots = Math.floor((wall.len - margin * 2) / module);
+  // The entrance wall gives up as much of that return as it needs to hold a
+  // single door, because the alternative is a house you cannot get into. Only
+  // this wall, and only when it would otherwise get nothing, so every other
+  // façade in the town is laid out exactly as before.
+  if (entrance && slots < 1 && wall.len >= module) {
+    slots = 1;
+    margin = (wall.len - module) / 2;
+  }
   if (slots < 1) return [];
 
   const kinds: BayKind[] = new Array(slots).fill('blank');
@@ -131,10 +143,10 @@ function layoutWall(
   };
 
   if (spec.kind === 'house') {
-    if (ground && wall.role === 'front') {
+    if (entrance) {
       // Never centre the entrance: 20–38% or 62–80% along the wall.
       const t = rng.chance(0.5) ? rng.range(0.2, 0.38) : rng.range(0.62, 0.8);
-      place(Math.floor(t * slots), 1, 'door');
+      place(Math.min(slots - 1, Math.floor(t * slots)), 1, 'door');
       if (spec.wantsCarPad && slots >= 5 && rng.chance(0.35)) {
         // Draw the coin either way so the seed stream does not shift, then use
         // it only when there is no pad to aim at.
@@ -165,7 +177,7 @@ function layoutWall(
         place(u, balconySlots, 'balcony');
       }
     }
-    if (ground && wall.role === 'front' && spec.kind === 'mansion') {
+    if (entrance && spec.kind === 'mansion') {
       place(Math.floor(slots * rng.range(0.25, 0.6)), Math.min(3, slots), 'door');
     }
   }

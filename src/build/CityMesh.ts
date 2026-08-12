@@ -6,7 +6,8 @@ import * as V from '../geom/vec2.js';
 import type { City } from '../city/City.js';
 import { buildBuilding, type BuiltBuilding } from '../building/Builder.js';
 import { makeBuildingSpec, clusterStyle } from '../building/style.js';
-import type { StyleVector } from '../building/types.js';
+import type { StyleVector, VacancyReason } from '../building/types.js';
+import type { Lot } from '../city/Lots.js';
 import { buildGround } from '../props/Ground.js';
 import { buildSiteProps } from '../props/SiteProps.js';
 import { PropRegistry } from '../props/PropRegistry.js';
@@ -25,10 +26,70 @@ export interface CityMeshResult {
     chunks: number;
     propInstances: number;
     buildMs: number;
+    /** Lots that got no building, and why. */
+    vacant: number;
+    vacancyReasons: Partial<Record<VacancyReason, number>>;
   };
 }
 
 /** Generate all geometry for a city and merge it into renderable meshes. */
+/** What the building pass decided, independently of any geometry. */
+export interface BuildingPlan {
+  buildings: BuiltBuilding[];
+  vacant: number;
+  vacancyReasons: Partial<Record<VacancyReason, number>>;
+}
+
+/**
+ * Decide what stands on every lot.
+ *
+ * Separated from mesh building because it used to be *inside* it: whether a lot
+ * got a building was settled while writing vertex buffers, the answer was
+ * thrown away, and so no headless caller — no test, no statistic — could see
+ * that a lot had been left empty, let alone why. Materials and a DOM are needed
+ * to draw a town; they are not needed to know what is in it.
+ */
+export function planBuildings(city: City, params: CityParams): BuildingPlan {
+  // One style vector per 分譲地 cluster, shared by every lot in the run.
+  const clusterStyles = new Map<number, StyleVector>();
+  const styleOf = (clusterId: number): StyleVector => {
+    let s = clusterStyles.get(clusterId);
+    if (!s) clusterStyles.set(clusterId, (s = clusterStyle(params.seed, clusterId)));
+    return s;
+  };
+
+  const buildings: BuiltBuilding[] = [];
+  const vacancyReasons: Partial<Record<VacancyReason, number>> = {};
+  const note = (lot: Lot, reason: VacancyReason) => {
+    lot.kind = 'vacant';
+    lot.vacancyReason = reason;
+    vacancyReasons[reason] = (vacancyReasons[reason] ?? 0) + 1;
+  };
+
+  for (const lot of city.lots) {
+    // `kind` is mutated in place below, so a second pass over the same city
+    // would see last time's 'vacant' and refuse a spec — leaving the lot empty
+    // for good, whatever the parameters now say. Clear it before asking.
+    if (lot.kind === 'vacant') lot.kind = lot.zonedKind;
+    lot.vacancyReason = null;
+
+    const spec = makeBuildingSpec(lot, styleOf(lot.clusterId), params.buildings);
+    if (!spec) {
+      note(lot, 'not-attempted');
+      continue;
+    }
+
+    const attempt = buildBuilding(lot, spec, params.buildings);
+    if (!attempt.ok) {
+      note(lot, attempt.reason);
+      continue;
+    }
+    buildings.push(attempt.building);
+  }
+
+  return { buildings, vacant: city.lots.length - buildings.length, vacancyReasons };
+}
+
 export function buildCityMesh(
   city: City,
   params: CityParams,
@@ -40,34 +101,18 @@ export function buildCityMesh(
 
   const chunks = new ChunkedMeshBuilder();
   const props = new PropRegistry();
-  const buildings: BuiltBuilding[] = [];
   const buildableDebug: Polygon[] = [];
   const footprintDebug: Polygon[] = [];
 
-  // One style vector per 分譲地 cluster, shared by every lot in the run.
-  const clusterStyles = new Map<number, StyleVector>();
-  const styleOf = (clusterId: number): StyleVector => {
-    let s = clusterStyles.get(clusterId);
-    if (!s) clusterStyles.set(clusterId, (s = clusterStyle(params.seed, clusterId)));
-    return s;
-  };
+  const plan = planBuildings(city, params);
+  const { buildings, vacancyReasons } = plan;
 
-  for (const lot of city.lots) {
-    const spec = makeBuildingSpec(lot, styleOf(lot.clusterId), params.buildings);
-    if (!spec) continue;
-
-    const built = buildBuilding(lot, spec, params.buildings);
-    if (!built) {
-      lot.kind = 'vacant';
-      continue;
-    }
-
-    buildings.push(built);
+  for (const built of buildings) {
+    const lot = built.lot;
     chunks.add(lot.centroid, built.buffers);
     if (built.envelope.buildable) buildableDebug.push(built.envelope.buildable);
     footprintDebug.push(built.footprint.outline);
-
-    buildSiteProps(props, lot, spec, built, params, makeRng(subSeed(lot.seed, 'props')));
+    buildSiteProps(props, lot, built.spec, built, params, makeRng(subSeed(lot.seed, 'props')));
   }
 
   group.add(chunks.build(materials));
@@ -86,6 +131,8 @@ export function buildCityMesh(
       chunks: chunks.chunkCount,
       propInstances: props.instanceCount,
       buildMs: performance.now() - t0,
+      vacant: plan.vacant,
+      vacancyReasons,
     },
   };
 }

@@ -88,6 +88,24 @@ export function segmentIntersection(
   return { point: addScaled(a1, r, ta), ta, tb };
 }
 
+/**
+ * Distance between two segments: zero if they cross, otherwise the smallest of
+ * the four endpoint-to-segment distances.
+ *
+ * The minimum for two disjoint segments is always attained at an endpoint of
+ * one of them, so those four values are exhaustive — no interior-to-interior
+ * case to consider.
+ */
+export function segmentDistance(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2): number {
+  if (segmentIntersection(a1, a2, b1, b2, 0)) return 0;
+  return Math.min(
+    distToSegment(a1, b1, b2),
+    distToSegment(a2, b1, b2),
+    distToSegment(b1, a1, a2),
+    distToSegment(b2, a1, a2),
+  );
+}
+
 /** Intersection of two infinite lines given as point + direction. */
 export function lineIntersection(p1: Vec2, d1: Vec2, p2: Vec2, d2: Vec2): Vec2 | null {
   const denom = cross(d1, d2);
