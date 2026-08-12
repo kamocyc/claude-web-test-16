@@ -299,6 +299,41 @@ const konbiniWallLayout: WallLayout = (ctx) => {
   return { fillWindows: false };
 };
 
+/**
+ * 工場・倉庫 — dock doors on the yard, louvres high up, blank everywhere else.
+ *
+ * The storey here is one floor and the height of three, so every vertical
+ * dimension is absolute rather than a fraction of the wall. That distinction is
+ * the whole trap in this layout: `yTop - 0.42` is a window head on a house and
+ * five metres in the air on a shed.
+ *
+ * Blankness is the default and is stated, not left to the window fill. A
+ * warehouse flank has nothing on it, and a scattering of domestic windows across
+ * forty metres of cladding is the single thing that would stop it reading as a
+ * warehouse.
+ */
+const industrialWallLayout: WallLayout = (ctx) => {
+  const { wall, spec, params, rng, slots, place } = ctx;
+  const yard = wall.role === 'front' || wall.isEntrance;
+  const bay = Math.max(4, Math.round(spec.unitWidth / params.module));
+
+  if (yard && slots >= 6) {
+    // Truck doors, on the structural bay. Two or three is a loading dock; a row
+    // of ten is a distribution centre, which this is not.
+    const doorSlots = Math.max(3, Math.round(4.0 / params.module));
+    let placed = 0;
+    const wanted = 1 + rng.int(3);
+    for (let u = 1; u + doorSlots <= slots - 1 && placed < wanted; u += doorSlots + 2) {
+      if (place(u, doorSlots, 'dockDoor')) placed++;
+    }
+  }
+
+  // A ventilation louvre in each remaining structural bay.
+  for (let u = 0; u + 2 <= slots; u += bay) place(u, 2, 'louvre');
+  for (let i = 0; i < slots; i++) place(i, 1, 'blankPanel');
+  return { fillWindows: false };
+};
+
 const LAYOUTS: Record<BuildingKind, WallLayout> = {
   house: houseWallLayout,
   apart: unitWallLayout,
@@ -306,8 +341,8 @@ const LAYOUTS: Record<BuildingKind, WallLayout> = {
   shophouse: shophouseWallLayout,
   zakkyo: zakkyoWallLayout,
   konbini: konbiniWallLayout,
-  factory: houseWallLayout,
-  warehouse: houseWallLayout,
+  factory: industrialWallLayout,
+  warehouse: industrialWallLayout,
 };
 
 function layoutWall(
@@ -566,6 +601,36 @@ function buildWallGeometry(
         // Glazed, not solid: the way into a 雑居ビル is a glass door onto the
         // stair, never the panelled front door of a house.
         buildShopfront(bufs, wall, at, bay.u0 + inset, bay.u1 - inset, floor.y0, doorTop, spec);
+        applyWallColor(buf, spec, floor);
+        break;
+      }
+
+      case 'dockDoor': {
+        // Absolute heights: this storey is one floor and the height of three, so
+        // a door sized off the wall would be a five-metre shutter.
+        const doorTop = Math.min(yTop - 0.4, floor.y0 + 4.2);
+        solid(bay.u0, bay.u1, doorTop, yTop);
+        buildShutter(bufs, wall, at, bay.u0, bay.u1, floor.y0, doorTop);
+        // The canopy over the dock, so a lorry can be unloaded in the rain.
+        const canopy: Vec2[] = [
+          at(bay.u0 - 0.3),
+          at(bay.u1 + 0.3),
+          at(bay.u1 + 0.3, Math.min(1.2, Math.max(0.3, wall.room))),
+          at(bay.u0 - 0.3, Math.min(1.2, Math.max(0.3, wall.room))),
+        ];
+        buf.setColor({ r: 0.72, g: 0.72, b: 0.7 });
+        buf.pushPrism(canopy, doorTop, doorTop + 0.18, true, true);
+        applyWallColor(buf, spec, floor);
+        break;
+      }
+
+      case 'louvre': {
+        // A band high on the wall, well above anything at ground level.
+        const lo = Math.max(floor.y0 + 2.2, yTop - 2.6);
+        const hi = Math.max(lo + 0.4, yTop - 0.8);
+        solid(bay.u0, bay.u1, floor.y0, lo);
+        solid(bay.u0, bay.u1, hi, yTop);
+        buildLouvre(bufs, wall, at, bay.u0, bay.u1, lo, hi);
         applyWallColor(buf, spec, floor);
         break;
       }
@@ -879,6 +944,41 @@ function buildGarageOpening(
     { x: wall.normal.x, y: 0, z: wall.normal.y },
   );
   void spec;
+}
+
+/** A run of angled ventilation slats set into a recess. */
+function buildLouvre(
+  bufs: FacadeBuffers,
+  wall: Wall,
+  at: (u: number, o?: number) => Vec2,
+  u0: number,
+  u1: number,
+  y0: number,
+  y1: number,
+): void {
+  if (u1 - u0 < 0.3 || y1 - y0 < 0.3) return;
+  const m = bufs.metal;
+  m.setColor({ r: 0.62, g: 0.63, b: 0.64 });
+  // Recess behind them, so the slats read as set into the wall rather than
+  // stuck on it. Dark, because a louvre is a hole with metal in front of it.
+  const w = bufs.wall;
+  w.setColor({ r: 0.24, g: 0.25, b: 0.26 });
+  const a = at(u0, -0.14);
+  const b = at(u1, -0.14);
+  w.pushQuad(
+    { x: a.x, y: y0, z: a.y },
+    { x: a.x, y: y1, z: a.y },
+    { x: b.x, y: y1, z: b.y },
+    { x: b.x, y: y0, z: b.y },
+    { x: wall.normal.x, y: 0, z: wall.normal.y },
+  );
+
+  const slats = Math.max(3, Math.round((y1 - y0) / 0.22));
+  const mid = V.lerp(at(u0), at(u1), 0.5);
+  for (let i = 0; i < slats; i++) {
+    const y = y0 + ((y1 - y0) * (i + 0.5)) / slats;
+    m.pushOrientedBox(mid.x, mid.y, wall.dir, 0.06, u1 - u0, y - 0.03, y + 0.03);
+  }
 }
 
 /**

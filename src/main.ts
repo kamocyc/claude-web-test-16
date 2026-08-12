@@ -186,9 +186,11 @@ Object.assign(window as unknown as Record<string, unknown>, {
     if (!lot) return null;
     const c = lot.centroid;
     // Steep and centred: a use is easiest to judge against the *lot* it stands
-    // on, and for the drive-in ones the lot is most of the point.
+    // on, and for the drive-in ones the lot is most of the point. Pulled back in
+    // proportion to the plot, since a factory parcel is thirty times a house's.
+    const r = Math.max(18, Math.sqrt(lot.area) * 1.6);
     return [
-      [c.x + 6, 38, c.y + 34],
+      [c.x + r * 0.2, r * 1.1, c.y + r],
       [c.x, 0, c.y],
     ];
   },

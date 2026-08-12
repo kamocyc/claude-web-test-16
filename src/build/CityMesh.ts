@@ -11,6 +11,7 @@ import type { Lot } from '../city/Lots.js';
 import { buildGround } from '../props/Ground.js';
 import { buildSiteProps } from '../props/SiteProps.js';
 import { buildCommercialProps } from '../props/CommercialProps.js';
+import { buildIndustrialProps } from '../props/IndustrialProps.js';
 import { KIND_RULES } from '../building/kinds.js';
 import { PropRegistry } from '../props/PropRegistry.js';
 import type { MaterialLibrary } from '../material/materials.js';
@@ -120,6 +121,8 @@ export function buildCityMesh(
     const group = KIND_RULES[built.spec.kind].group;
     if (group === 'commercial') {
       buildCommercialProps(props, lot, built.spec, built, params, makeRng(subSeed(lot.seed, 'shopProps')));
+    } else if (group === 'industrial') {
+      buildIndustrialProps(props, lot, built.spec, built, params, makeRng(subSeed(lot.seed, 'yardProps')));
     }
   }
 
