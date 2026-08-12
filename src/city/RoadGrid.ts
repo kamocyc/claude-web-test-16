@@ -1,5 +1,5 @@
 import type { Polygon, Vec2 } from '../core/types.js';
-import { DEG, type LandUseParams, type RoadClass, type RoadParams } from '../core/params.js';
+import { DEG, type LotParams, type RoadClass, type RoadParams } from '../core/params.js';
 import { makeRng, subSeed, type Rng } from '../core/rng.js';
 import * as V from '../geom/vec2.js';
 import { clipSegmentToPolygonAll } from '../geom/polygon.js';
@@ -8,7 +8,7 @@ import { centroid } from '../geom/polygon.js';
 import type { District, DistrictBoundary } from './RoadDistricts.js';
 import type { ObstacleField } from '../terrain/Obstacles.js';
 import { roadWidth } from './Roads.js';
-import { spacingForGeneration } from './RoadGrowth.js';
+import { lotModule } from './LotModule.js';
 
 /**
  * Tier-2: the residential grid inside one district.
@@ -139,7 +139,7 @@ export function gridLines(
  * live *on* the grid lines — a separately drawn collector would slice every
  * block it crossed into slivers.
  */
-export function classifyLines(rng: Rng, count: number, p: RoadParams, spacing = p.localSpacing): RoadClass[] {
+export function classifyLines(rng: Rng, count: number, p: RoadParams, spacing: number): RoadClass[] {
   const cls: RoadClass[] = Array.from({ length: count }, () => 'local');
   const step = Math.max(2, Math.round(p.collectorSpacing / spacing));
   const phase = rng.int(step);
@@ -271,65 +271,77 @@ function boundaryAt(boundary: DistrictBoundary[], p: Vec2, tol = 1.5): DistrictB
   return best;
 }
 
+/**
+ * Variation allowed across a block's depth.
+ *
+ * Nearly none, and that is the point. Depth is two lot depths and the road
+ * between them; there is no slack in it, and the ±18% this used to carry — the
+ * same figure the block's *length* still carries — is what left the subdivider
+ * with 7–33 m of spine to stretch its lots over or abandon. What remains is
+ * enough to keep two neighbouring blocks from measuring identically.
+ */
+const CROSS_VARIATION = 0.04;
+
 /** Lay out the local streets of one district. */
 export function districtStreets(
   d: District,
   p: RoadParams,
-  landUse: LandUseParams,
+  lots: LotParams,
   obstacles?: ObstacleField,
 ): StreetLine[] {
   if (d.area < p.minDistrictArea) return [];
 
-  // Two things reach into the street grid here, and this is the only place
-  // either of them does.
+  // The whole of the grid's size comes from one place: the plot this district is
+  // meant to hold. 用途地域 and the district's age both reach the streets through
+  // it and through nothing else — a factory parcel is 3,000–4,000 m² and a
+  // station-side plot is 90, and the block around either one is two rows deep.
   //
-  // 用途地域: a factory parcel is 3,000-4,000 m²; the ordinary 45 m grid yields
-  // blocks of 1,500-2,000 m², and `Blocks.maxArea` would cut anything larger
-  // anyway. No lot parameter can produce an industrial parcel behind a
-  // residential street grid, so the zone has to coarsen the streets themselves.
-  //
-  // Age: a district laid out early, when land near the station was worth
-  // subdividing finely, gets a tighter grid than one thrown across a hillside
-  // twenty years later. This one line is the largest single lever on the
-  // town's density gradient — everything else about growth arranges for the
-  // district to *have* a sensible generation, and this is what spends it.
-  const spacing =
-    d.zone === 'industrial'
-      ? landUse.industrialLocalSpacing
-      : p.growth.enabled
-        ? spacingForGeneration(d.generation, p.growth)
-        : p.localSpacing;
+  // See `city/LotModule.ts` for why the derivation runs in this direction.
+  const mod = lotModule(d.zone, d.generation, p, lots);
 
   const rng = makeRng(subSeed(d.seed, 'grid'));
   const frame = makeFrame(centroid(d.polygon), d.axis);
   const ext = extentsIn(d.polygon, frame);
   if (ext.w < p.minLocalSpacing || ext.d < p.minLocalSpacing) return [];
 
+  // Which way the blocks run. The plots front the streets that run down the
+  // block's *long* side, so the family spaced at `mod.cross` is the one whose
+  // gaps are the block's depth — and the long side is put along the district's
+  // own long axis, so the two families are not fighting the shape they are in.
+  const longIsU = ext.w >= ext.d;
+  const uSpacing = longIsU ? mod.along : mod.cross;
+  const vSpacing = longIsU ? mod.cross : mod.along;
+  const uVar = longIsU ? p.gridSpacingVariation : CROSS_VARIATION;
+  const vVar = longIsU ? CROSS_VARIATION : p.gridSpacingVariation;
+
   // Streets down the district's long axis and across it. `gridLines` returns
   // both ends of the span too; those land on the boundary, where the boundary
   // road already is, so they are dropped.
-  const us = gridLines(rng, ext.w / 2, spacing, p.gridSpacingVariation, p.minLocalSpacing)
+  const us = gridLines(rng, ext.w / 2, uSpacing, uVar, p.minLocalSpacing)
     .map((u) => u + ext.cx)
     .slice(1, -1);
-  const vs = gridLines(rng, ext.d / 2, spacing, p.gridSpacingVariation, p.minLocalSpacing)
+  const vs = gridLines(rng, ext.d / 2, vSpacing, vVar, p.minLocalSpacing)
     .map((v) => v + ext.cy)
     .slice(1, -1);
 
   const uCls = p.promoteGridLines
-    ? classifyLines(rng, us.length, p, spacing)
+    ? classifyLines(rng, us.length, p, uSpacing)
     : (Array.from({ length: us.length }, () => 'local') as RoadClass[]);
   const vCls = p.promoteGridLines
-    ? classifyLines(rng, vs.length, p, spacing)
+    ? classifyLines(rng, vs.length, p, vSpacing)
     : (Array.from({ length: vs.length }, () => 'local') as RoadClass[]);
 
   // Run the lines well past the district so they always reach its boundary.
-  const pad = spacing;
+  const pad = Math.max(uSpacing, vSpacing);
   const family = [
     ...buildFamily(rng, frame, us, ext.cy - ext.d / 2 - pad, ext.cy + ext.d / 2 + pad, 1, uCls, p),
     ...buildFamily(rng, frame, vs, ext.cx - ext.w / 2 - pad, ext.cx + ext.w / 2 + pad, 0, vCls, p),
   ];
 
-  const kept = family.filter((line) => !boundaryVerdict(line.path, d.boundary, p, spacing).drop);
+  // Measured against the block depth in both directions: a street running
+  // alongside a main road has to be a block away from it, and a block is
+  // `mod.cross` deep whichever way it is turned.
+  const kept = family.filter((line) => !boundaryVerdict(line.path, d.boundary, p, mod.cross).drop);
 
   // Every junction becomes an explicit shared node: cut each line at its
   // crossings with the others up front rather than leaving it to `makePlanar`.

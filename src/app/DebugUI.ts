@@ -99,8 +99,8 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   // --- 都市の成長 -----------------------------------------------------------
   const fGrowth = gui.addFolder('都市の成長').close();
   fGrowth.add(params.roads.growth, 'enabled').name('成長させる（切ると一発生成）');
-  fGrowth.add(params.roads.growth, 'coreSpacing', 24, 60, 1).name('中心部の街路間隔(m)');
-  fGrowth.add(params.roads.growth, 'fringeSpacing', 35, 110, 1).name('外縁部の街路間隔(m)');
+  fGrowth.add(params.roads.growth, 'coreLotScale', 0.5, 1.4, 0.02).name('中心部の敷地の大きさ(倍)');
+  fGrowth.add(params.roads.growth, 'fringeLotScale', 0.8, 2.5, 0.02).name('外縁部の敷地の大きさ(倍)');
   fGrowth.add(params.roads.growth, 'fringeVacancy', 0, 0.6, 0.02).name('外縁の未分譲率');
   fGrowth.add(params.roads.growth, 'fullAt', 6, 48, 1).name('市街化が完了する年齢');
   fGrowth.add(params.roads.growth, 'spreadExponent', 0.3, 1.4, 0.02).name('広がりの速さ');
@@ -130,8 +130,7 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
     });
   fRoads.add(params.roads, 'diagonalCount', 0, 4, 1).name('斜め道路の本数');
   fRoads.add(params.roads, 'extent', 120, 600, 10).name('街の広さ');
-  fRoads.add(params.roads, 'localSpacing', 25, 90, 1).name('区画街路の間隔');
-  fRoads.add(params.roads, 'gridSpacingVariation', 0, 0.5, 0.01).name('格子間隔の変動(格子のみ)');
+  fRoads.add(params.roads, 'gridSpacingVariation', 0, 0.5, 0.01).name('街区の長さの変動');
   fRoads.add(params.roads, 'collectorSpacing', 120, 320, 10).name('地区の大きさ');
   fRoads.add(params.roads, 'deleteFraction', 0, 0.45, 0.01).name('街路の間引き率');
   fRoads.add(params.roads, 'deadEndFraction', 0, 0.4, 0.01).name('行き止まり率');
@@ -143,11 +142,15 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fRoads.add(params.roads, 'arterialCount', 0, 4, 1).name('幹線道路の本数');
 
   // --- Lots ----------------------------------------------------------------
+  // The two sliders that move the street grid, and the only two that do now:
+  // `city/LotModule.ts` spaces the streets at two lot depths plus the road, and
+  // caps the block at a whole number of frontages. Dragging 平均奥行 does not
+  // make the lots deeper inside the same blocks — it makes the blocks deeper.
   const fLots = gui.addFolder('敷地分割').close();
   fLots.add(params.lots, 'minLotArea', 8, 160, 1).name('最小面積');
   fLots.add(params.lots, 'maxLotArea', 150, 900, 10).name('最大面積');
-  fLots.add(params.lots, 'widthMean', 5, 24, 0.5).name('平均間口');
-  fLots.add(params.lots, 'depthMean', 8, 30, 0.5).name('平均奥行');
+  fLots.add(params.lots, 'widthMean', 5, 24, 0.5).name('平均間口（街区の長さを決める）');
+  fLots.add(params.lots, 'depthMean', 8, 30, 0.5).name('平均奥行（街路の間隔を決める）');
   fLots.add(params.lots, 'cutAngleJitter', 0, 15, 0.5).name('境界の傾き(度)');
   fLots.add(params.lots, 'flagLotChance', 0, 1, 0.05).name('旗竿地の発生率');
   fLots.add(params.lots, 'minFrontage', 0.5, 8, 0.1).name('最小間口(接道)');
@@ -157,11 +160,11 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   // --- Land use ------------------------------------------------------------
   // Upstream of everything in 用途配分 below: this decides the *map*, that
   // decides what gets built under it. Changing the industrial share moves the
-  // street grid, so these all force a full regeneration like every other slider.
+  // street grid — the industrial plot is a different size, and the grid is sized
+  // to the plot — so these all force a full regeneration like every other slider.
   const fUse = gui.addFolder('用途地域').close();
   fUse.add(params.landUse, 'industrialShare', 0, 0.4, 0.01).name('工業地区の面積比');
   fUse.add(params.landUse, 'industrialMinStationDist', 0, 600, 10).name('駅から工業までの距離');
-  fUse.add(params.landUse, 'industrialLocalSpacing', 45, 160, 5).name('工業地区の街路間隔');
   fUse.add(params.landUse, 'commercialCoreRadius', 60, 400, 10).name('駅前商業の半径');
   fUse.add(params.landUse, 'neighbourhoodRadius', 100, 600, 10).name('近隣商業の広がり');
   fUse.add(params.landUse, 'quasiIndustrialRing').name('工業を準工業で囲む');

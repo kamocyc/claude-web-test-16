@@ -1,5 +1,5 @@
 import type { Vec2 } from '../core/types.js';
-import type { LandUseParams, RoadClass, RoadParams } from '../core/params.js';
+import type { LandUseParams, LotParams, RoadClass, RoadParams } from '../core/params.js';
 import * as V from '../geom/vec2.js';
 import { makePlanar, PlanarGraph, splitEdgesAtNodes } from '../geom/planarGraph.js';
 import { generateSkeleton } from './RoadSkeleton.js';
@@ -84,6 +84,7 @@ export function generateRoads(
   seed: string,
   p: RoadParams,
   landUse: LandUseParams,
+  lots: LotParams,
   terrain: Terrain,
   obstacles: ObstacleField,
 ): RoadNetwork {
@@ -97,11 +98,12 @@ export function generateRoads(
 
   // --- 1b. 用途地域 --------------------------------------------------------
   // Land use is settled here, in the middle of road generation, rather than
-  // downstream with the rest of the zoning. It has to be: an industrial
-  // district lays a coarser street grid than a residential one, and the grid is
-  // laid in the next step. This is the one place a downstream concept reaches
-  // back upstream, and it is not avoidable — a 45 m grid cannot hold a factory
-  // parcel no matter what the lot parameters say.
+  // downstream with the rest of the zoning. It has to be: the street grid is
+  // sized to the plot it will hold (`city/LotModule.ts`), a factory parcel is
+  // twenty-five times a house plot, and the grid is laid in the next step. This
+  // is the one place a downstream concept reaches back upstream, and it is not
+  // avoidable — a block sized for houses cannot hold a factory however the lot
+  // parameters are set.
   assignLandUse(districts, skeleton.station, E, seed, landUse);
 
   // --- 2. Tier-2: each district's own grid ---------------------------------
@@ -112,7 +114,7 @@ export function generateRoads(
   for (const d of districts) {
     // Land the town has not reached yet gets no streets. It is still fields.
     if (!d.developed) continue;
-    for (const line of districtStreets(d, p, landUse, obstacles)) {
+    for (const line of districtStreets(d, p, lots, obstacles)) {
       for (let i = 0; i + 1 < line.pts.length; i++) {
         raw.addSegment(line.pts[i]!, line.pts[i + 1]!, {
           cls: line.cls,
@@ -178,7 +180,7 @@ export function generateRoads(
   // Clearance deletes whole spans, and deleting the span a collector hung off
   // strands the collector. So the Tier-1 dead-end check runs after it, not
   // before — see `pruneTier1Spurs`.
-  graph = pruneTier1Spurs(cleared.graph, p); // TEMP-PROBE
+  graph = pruneTier1Spurs(cleared.graph, p);
   edges = readEdges(graph, p);
 
   net.graph = graph;

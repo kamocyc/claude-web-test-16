@@ -418,18 +418,31 @@ const ZONE_LOTS: Partial<Record<UseZone, Partial<LotParams>>> = {
     // Narrow and deep — the 間口 of a shophouse row. `widthMin` is the number to
     // watch: `MIN_PLAN_WIDTH_MODULES` puts the floor for a building at 2.46 m and
     // a lot much under 5 m wide starts coming back as `too-narrow`.
-    widthMean: 6.0,
-    widthSigma: 1.2,
+    widthMean: 6.4,
+    widthSigma: 2.2,
     widthMin: 4.6,
     widthMax: 14,
-    depthMean: 12.5,
+    depthMean: 12.0,
     maxLotArea: 260,
-    // The one lever that makes a コンビニ site possible. It does not place one —
-    // whether a shop appears is still decided downstream from area, frontage and
-    // shallowness — it only coarsens the parcel grain on the wide roads so that
-    // such a site can occur at all. Exactly what `maxLotAreaMajor` already does
-    // for マンション, and the honest thing to adjust if too few appear.
-    widthMeanMajor: 19,
+    /**
+     * The main road through a 近隣商業 district is a *mix*, and it has to be
+     * stated as one.
+     *
+     * This used to read 19 with a σ of 1.2, on the reasoning that widening the
+     * main-road parcels is what makes a コンビニ site possible. It does — and it
+     * quietly made a 商店街 impossible at the same time, because `shophouseMax‑
+     * Frontage` is 9 m and every parcel on the road was 19. The gate's own
+     * `onWideRoad` clause was therefore unreachable: the only 店舗併用住宅 in a
+     * 近隣商業 district were the ones a spike in the width jitter happened to
+     * leave narrow, ten of them in the whole town, and a change to the block
+     * grain elsewhere took even those away.
+     *
+     * A real 近隣商業 street is mostly narrow 間口 with the occasional
+     * consolidated forecourt site among them. Saying that here — a lower mean
+     * with a much wider spread — produces both, and neither gate has to be
+     * relaxed to let it happen.
+     */
+    widthMeanMajor: 13,
   },
   commercial: {
     // A downtown block is a mix, and it has to be: the narrow parcels become

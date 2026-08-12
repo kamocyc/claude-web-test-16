@@ -9,7 +9,7 @@ import { generateCity } from '../src/city/City.js';
 import { planBuildings } from '../src/build/CityMesh.js';
 import type { Polygon, Vec2 } from '../src/core/types.js';
 import * as V from '../src/geom/vec2.js';
-import { area } from '../src/geom/polygon.js';
+import { area, maxInscribedCircle } from '../src/geom/polygon.js';
 import { differencePoly, multiArea, intersectPoly } from '../src/geom/boolean.js';
 import { UNAVOIDABLE_VACANCY } from '../src/building/types.js';
 
@@ -227,13 +227,28 @@ describe('lot area', () => {
       list.push(lot);
       byBlock.set(lot.blockId, list);
     }
+    // Measured by how *wide* the shared piece is, not only by its area.
+    //
+    // Two lots that share a boundary do not share it to the micrometre: the
+    // boundary has been through `cleanPolygon` on both sides, which is allowed
+    // to move a vertex by its 0.04 m tolerance and to absorb an edge shorter
+    // than 0.2 m. Sweep 0.05 m of drift down a 13 m party line and that is
+    // 0.7 m² of "overlap" which is not a claim on anything — it is the seam.
+    // A pair of lots that genuinely both hold the same ground hold *ground*:
+    // metres of it across, not centimetres.
     const bad: string[] = [];
     for (const [blockId, lots] of byBlock) {
       for (let i = 0; i < lots.length; i++) {
         for (let j = i + 1; j < lots.length; j++) {
-          const ov = multiArea(intersectPoly([lots[i]!.polygon], [lots[j]!.polygon]));
-          if (ov > 0.5) {
-            bad.push(`block ${blockId}: lots ${lots[i]!.id}/${lots[j]!.id} share ${ov.toFixed(1)} m²`);
+          const shared = intersectPoly([lots[i]!.polygon], [lots[j]!.polygon]);
+          const ov = multiArea(shared);
+          if (ov <= 0.5) continue;
+          const width = Math.max(0, ...shared.map((s) => maxInscribedCircle(s, 0.05).radius * 2));
+          if (width > 0.3) {
+            bad.push(
+              `block ${blockId}: lots ${lots[i]!.id}/${lots[j]!.id} share ${ov.toFixed(1)} m², ` +
+                `${width.toFixed(2)} m across`,
+            );
           }
         }
       }

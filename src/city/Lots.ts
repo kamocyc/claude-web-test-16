@@ -5,6 +5,7 @@ import * as V from '../geom/vec2.js';
 import {
   area,
   centroid,
+  clipSegmentToPolygonAll,
   edges as polyEdges,
   isSimple,
   maxInscribedCircle,
@@ -244,22 +245,24 @@ function subdivideInterior(
   depth: number,
 ): Parcel[] {
   const parcels: Parcel[] = [];
-  // A block fronting a wide road gets deeper lots; that plus wider slices is
-  // what produces the large arterial-front parcels マンション need.
-  const major = fronts.some((f) => f.cls === 'arterial' || f.cls === 'collector');
-  const lotDepth = rng.gaussClamped(
-    major ? cfg.depthMeanMajor : cfg.depthMean,
-    cfg.depthSigma,
-    cfg.depthMin,
-    major ? cfg.depthMeanMajor + 8 : cfg.depthMax,
-  );
 
-  // The core is what remains once every frontage edge is pushed inward by the
-  // lot depth. Offsetting *only* the frontage edges is exactly an intersection
-  // of half-planes — no variable-width offsetter needed.
+  // Widest road first, then longest edge. The order decides who gets the corners
+  // and, now that depth is fitted to what is left, who gets the depth: the block
+  // takes its grain from the biggest road on it, which is what lets a parcel on
+  // an arterial be deep enough for a マンション while the local street behind it
+  // still gets an ordinary row.
+  const ordered = [...fronts].sort(
+    (a, b) => classRank(b.cls) - classRank(a.cls) || V.dist(b.a, b.b) - V.dist(a.a, a.b),
+  );
+  const depthOf = new Map<FrontRef, number>();
+  for (const f of ordered) depthOf.set(f, rowDepth(inner, f, cfg, rng));
+
+  // The core is what remains once every frontage edge is pushed inward by its
+  // own row depth. Offsetting *only* the frontage edges is exactly an
+  // intersection of half-planes — no variable-width offsetter needed.
   let coreParts: Polygon[] = [inner];
-  for (const f of fronts) {
-    const hp: HalfPlane = { origin: V.addScaled(f.a, f.inward, lotDepth), normal: f.inward };
+  for (const f of ordered) {
+    const hp: HalfPlane = { origin: V.addScaled(f.a, f.inward, depthOf.get(f)!), normal: f.inward };
     const next: Polygon[] = [];
     for (const p of coreParts) next.push(...clipHalfPlane(p, hp));
     coreParts = next;
@@ -268,7 +271,7 @@ function subdivideInterior(
   const core = coreParts.length > 0 ? largest(coreParts) : null;
   const coreArea = core ? area(core) : 0;
 
-  // Strips: the part of `inner` within `lotDepth` of each frontage edge, with
+  // Strips: the part of `inner` within the row depth of each frontage edge, with
   // earlier strips subtracted so corners are not claimed twice.
   const strips: { poly: Polygon; front: FrontRef }[] = [];
   // Kept as a plain list, deliberately *not* unioned: the union of frontage
@@ -276,14 +279,29 @@ function subdivideInterior(
   // unioning would silently hand back a solid disc and over-subtract every
   // later band.
   const consumed: Polygon[] = [];
-  const ordered = [...fronts].sort((a, b) => V.dist(b.a, b.b) - V.dist(a.a, a.b));
 
   for (const f of ordered) {
-    const cut: HalfPlane = {
-      origin: V.addScaled(f.a, f.inward, lotDepth),
+    // A slab, bounded on *both* sides — no deeper than the row, and not behind
+    // the frontage at all.
+    //
+    // The near side used to be left open, on the reasoning that there is nothing
+    // behind a frontage but the road it fronts. That holds for a block edge and
+    // fails completely for a dead-end street through the middle of a block: both
+    // sides of it are frontage, and everything on the far side of it is at a
+    // *negative* depth from this one. So one front's band swallowed the whole
+    // other half of the block — 50 m of it — and then sliced it perpendicular to
+    // its own street into 5 m ribbons 47 m long. Those were the town's worst
+    // parcels by a distance, and every one of them came from here.
+    // Half a metre behind the frontage line rather than exactly on it: the block
+    // interior already starts there, so nothing is lost, and a clip plane lying
+    // exactly along an existing boundary is what `polygon-clipping` is worst at.
+    const front: HalfPlane = { origin: V.addScaled(f.a, f.inward, -0.5), normal: f.inward };
+    const back: HalfPlane = {
+      origin: V.addScaled(f.a, f.inward, depthOf.get(f)!),
       normal: V.neg(f.inward),
     };
-    let band = clipHalfPlane(inner, cut);
+    let band: Polygon[] = [];
+    for (const p of clipHalfPlane(inner, front)) band.push(...clipHalfPlane(p, back));
     if (consumed.length > 0) band = differencePoly(band, consumed);
     for (const p of band) {
       if (area(p) >= cfg.minLotArea * 0.6) strips.push({ poly: p, front: f });
@@ -353,6 +371,87 @@ function subdivideInterior(
   }
 
   return parcels;
+}
+
+/**
+ * Share of a block's depth the row on the wide road takes.
+ *
+ * A parcel on an arterial is deeper as well as wider — that pair is the whole of
+ * what makes a マンション site geometrically possible, without any zoning rule
+ * ever naming one. An even split of a 33 m block leaves 16.5 m, and 21 m of
+ * frontage by 16.5 m is 346 m² against the 400 a マンション needs.
+ */
+const MAJOR_DEPTH_SHARE = 0.62;
+
+/** Sample rays cast into the block from each frontage. */
+const REACH_SAMPLES = 5;
+
+/**
+ * How far the block goes back from this frontage.
+ *
+ * The median of a few rays cast inward, rather than the extreme: a block is a
+ * face of a road graph, not a rectangle, and one clipped corner or one edge
+ * meeting another at 60° makes the maximum reach half again the typical one.
+ *
+ * Only the run that starts *at* the frontage counts. A block with a dead-end
+ * street through it is a C, and the land on the far side of that street belongs
+ * to the row fronting the street, not to this one.
+ */
+function blockReach(inner: Polygon, f: FrontRef): number {
+  const runs: number[] = [];
+  for (let i = 0; i < REACH_SAMPLES; i++) {
+    // Started a hair inside: the frontage line lies exactly on the boundary of
+    // `inner`, where a clip is a coin toss.
+    const q = V.addScaled(V.lerp(f.a, f.b, (i + 0.5) / REACH_SAMPLES), f.inward, 0.05);
+    let best = 0;
+    for (const [a, b] of clipSegmentToPolygonAll(inner, q, V.addScaled(q, f.inward, 400))) {
+      const t0 = V.dot(V.sub(a, q), f.inward);
+      const t1 = V.dot(V.sub(b, q), f.inward);
+      if (Math.min(t0, t1) > 0.5) continue;
+      best = Math.max(best, Math.max(t0, t1));
+    }
+    if (best > 0.5) runs.push(best + 0.05);
+  }
+  if (runs.length === 0) return 0;
+  runs.sort((a, b) => a - b);
+  return runs[runs.length >> 1]!;
+}
+
+/**
+ * How deep the row of lots along this frontage should be.
+ *
+ * **Fitted to the block, not drawn independently of it.** The drawn depth is a
+ * fallback for the one case where the block is genuinely deeper than two rows —
+ * where a 私道 or a run of 旗竿地 into the middle is the honest answer. Everywhere
+ * else the block is divided exactly: two rows meeting on a shared rear boundary,
+ * or one row through a block too shallow for two.
+ *
+ * Drawing the depth first and living with the remainder is what produced the
+ * town's long thin parcels. The block gave 34–60 m of usable depth against two
+ * rows' 27, and the leftover had to go somewhere — so the lots stretched, the
+ * median parcel came out 7.8 m × 20.8 m, and every house on one was shaped to
+ * suit. `city/LotModule.ts` now sizes the streets so the fitted answer is close
+ * to the drawn one; this is what makes sure it is *exact*.
+ */
+function rowDepth(inner: Polygon, f: FrontRef, cfg: LotParams, rng: Rng): number {
+  const major = f.cls === 'arterial' || f.cls === 'collector';
+  const cap = major ? cfg.depthMeanMajor + 8 : cfg.depthMax;
+  // Drawn unconditionally and before the branch, so the shape of one block
+  // cannot shift the random stream for everything after it.
+  const drawn = rng.gaussClamped(
+    major ? cfg.depthMeanMajor : cfg.depthMean,
+    cfg.depthSigma,
+    cfg.depthMin,
+    cap,
+  );
+
+  const reach = blockReach(inner, f);
+  if (reach <= 0) return drawn;
+  // Too shallow for two rows: one row goes right through, backing onto the far
+  // street. Better than two rows of 8 m, and better than half a block of nothing.
+  if (reach < 2 * cfg.depthMin) return Math.min(reach, cap);
+  if (reach > 2 * cap) return drawn;
+  return Math.min(cap, reach * (major ? MAJOR_DEPTH_SHARE : 0.5));
 }
 
 /** Cut a frontage strip into individual lots along the street. */

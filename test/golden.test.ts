@@ -62,38 +62,47 @@ function hashBuildings(plan: ReturnType<typeof planBuildings>): number {
  * run — the assertion prints both sides — and paste the new values in.
  */
 const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }> = {
-  // Re-recorded once, deliberately: `pruneTier1Spurs` found a genuinely
-  // stranded collector on this seed that the flat generator had always left
-  // there. `test/roads.test.ts` never caught it because it checks a different
-  // seed. One lot moved as a result.
+  // Re-recorded, deliberately, twice.
+  //
+  // Once because `pruneTier1Spurs` found a genuinely stranded collector on this
+  // seed that the flat generator had always left there — `test/roads.test.ts`
+  // never caught it because it checks a different seed. One lot moved.
+  //
+  // And once for every case at the same time, when the street grid stopped being
+  // spaced by a number of its own and started being derived from the plot it is
+  // there to serve (`city/LotModule.ts`). That moves every block boundary in
+  // every town, so nothing here could have survived it. The proportion it was
+  // recorded for is now measured directly in `test/parcels.test.ts`, which is
+  // the test that would notice if it regressed — this one only says the town
+  // stopped changing afterwards.
   'sakura-3/district': {
-    lots: 3493833412,
-    buildings: 1925033318,
+    lots: 2342680936,
+    buildings: 3651763202,
     counts:
-      '{"house":360,"apart":133,"mansion":9,"factory":1,"shophouse":34,"vacant":4,"zakkyo":4,"konbini":2}',
+      '{"house":281,"apart":125,"mansion":21,"factory":1,"vacant":11,"shophouse":18,"zakkyo":8,"konbini":1}',
   },
   'sakura-3/grid': {
-    lots: 2354422704,
-    buildings: 116898347,
-    counts: '{"warehouse":5,"factory":5,"apart":177,"house":244,"konbini":1,"vacant":1}',
+    lots: 426985575,
+    buildings: 1269463838,
+    counts: '{"warehouse":3,"factory":13,"vacant":5,"konbini":2,"apart":168,"house":150}',
   },
   'kaede-11/district': {
-    lots: 2775236398,
-    buildings: 3203035098,
+    lots: 3979257205,
+    buildings: 4139608829,
     counts:
-      '{"house":251,"apart":152,"mansion":13,"konbini":2,"vacant":8,"zakkyo":13,"shophouse":2}',
+      '{"house":217,"apart":107,"mansion":35,"factory":2,"vacant":10,"konbini":2,"zakkyo":16,"shophouse":2}',
   },
   'sakura-3/district/land': {
-    lots: 2946637706,
-    buildings: 368046137,
+    lots: 2381816926,
+    buildings: 2651365310,
     counts:
-      '{"house":157,"vacant":60,"apart":70,"mansion":9,"shophouse":8,"zakkyo":9,"konbini":4,"warehouse":3}',
+      '{"house":160,"apart":71,"vacant":65,"mansion":23,"zakkyo":7,"konbini":3,"shophouse":1,"warehouse":2,"factory":4}',
   },
   'kaede-11/district/land': {
-    lots: 3513720245,
-    buildings: 3878776238,
+    lots: 4004031399,
+    buildings: 899423456,
     counts:
-      '{"house":171,"apart":78,"vacant":37,"mansion":7,"konbini":2,"warehouse":11,"shophouse":30,"zakkyo":5}',
+      '{"house":133,"apart":74,"vacant":36,"mansion":17,"konbini":4,"warehouse":5,"factory":3,"shophouse":12,"zakkyo":7}',
   },
 };
 

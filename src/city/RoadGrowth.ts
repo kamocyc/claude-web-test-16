@@ -326,8 +326,9 @@ const townRadius = (q: Vec2): number => Math.max(Math.abs(q.x), Math.abs(q.y));
  *
  * This is the first of the two levers that make the middle of the town denser
  * than the edge, and it acts before a single block exists: it decides how big
- * the enclosed faces are. The second lever is `districtStreets`, which grids
- * each face according to when it was enclosed.
+ * the enclosed faces are. The second lever is the plot — `LotModule` sizes it by
+ * when the face was enclosed, and the face's own streets are then spaced to
+ * hold it.
  */
 function tier1Spacing(r: number, extent: number, p: RoadParams): number {
   const t = Math.min(1, r / Math.max(1, extent));
@@ -348,18 +349,14 @@ export function frontierReach(step: number, extent: number, g: GrowthParams): nu
 }
 
 /**
- * Target local-street spacing for a district enclosed at generation `gen`.
+ * How late in the town's development a generation is, in [0, 1].
  *
- * Also against `fullAt`: a district enclosed at step 5 was developed to the
- * standard of step 5, and how much longer the town went on growing afterwards
- * does not retroactively change what was built there.
+ * Against `fullAt`, not `steps`: a district enclosed at step 5 was developed to
+ * the standard of step 5, and how much longer the town went on growing
+ * afterwards does not retroactively change what was built there. What that
+ * standard *is* — the size of the plots, and so the spacing of the streets
+ * between them — is `LotModule.lotScaleForGeneration`.
  */
-export function spacingForGeneration(gen: number, g: GrowthParams): number {
-  const t = generationAge(gen, g);
-  return g.coreSpacing + (g.fringeSpacing - g.coreSpacing) * (t * t * (3 - 2 * t));
-}
-
-/** How late in the town's development a generation is, in [0, 1]. */
 export const generationAge = (gen: number, g: GrowthParams): number =>
   Math.min(1, Math.max(0, gen / Math.max(1, g.fullAt - 1)));
 
