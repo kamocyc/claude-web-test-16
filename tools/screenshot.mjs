@@ -6,6 +6,12 @@
  *
  *   node tools/screenshot.mjs [--url http://127.0.0.1:5173] [--out shots]
  *                             [--seed sakura-3] [--only overview]
+ *                             [--zones commercial,industrial] [--kinds konbini,factory]
+ *
+ * `--zones` adds two shots per 用途地域 named: one from the air and one standing
+ * on the longest street inside it. Fixed camera positions cannot show the
+ * zoning, because where the shops and the factories land is different for every
+ * seed — and a shopping street only reads as one when you are looking *along* it.
  */
 import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
@@ -23,6 +29,8 @@ const OUT = arg('out', 'shots');
 const SEED = arg('seed', null);
 const LAYOUT = arg('layout', null);
 const ONLY = arg('only', null);
+const ZONES = arg('zones', null);
+const KINDS = arg('kinds', null);
 
 /** [name, cameraPosition, lookAtTarget] */
 const VIEWS = [
@@ -96,6 +104,40 @@ for (const [name, pos, target] of shots) {
   const file = path.join(OUT, `${name}.png`);
   await page.screenshot({ path: file });
   console.log(`wrote ${file}`);
+}
+
+for (const zone of ZONES ? ZONES.split(',') : []) {
+  const centre = await page.evaluate((z) => window.__zoneCentre(z), zone);
+  if (!centre) {
+    console.log(`no ${zone} district in this town`);
+    continue;
+  }
+  await page.evaluate(([p, t]) => window.__setCamera(p, t), [
+    [centre[0] + 90, 70, centre[1] + 90],
+    [centre[0], 0, centre[1]],
+  ]);
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: path.join(OUT, `${zone}-air.png`) });
+  console.log(`wrote ${path.join(OUT, `${zone}-air.png`)}`);
+
+  const view = await page.evaluate((z) => window.__streetViewIn(z), zone);
+  if (!view) continue;
+  await page.evaluate(([p, t]) => window.__setCamera(p, t), view);
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: path.join(OUT, `${zone}-street.png`) });
+  console.log(`wrote ${path.join(OUT, `${zone}-street.png`)}`);
+}
+
+for (const kind of KINDS ? KINDS.split(',') : []) {
+  const view = await page.evaluate((k) => window.__kindView(k), kind);
+  if (!view) {
+    console.log(`no ${kind} in this town`);
+    continue;
+  }
+  await page.evaluate(([p, t]) => window.__setCamera(p, t), view);
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: path.join(OUT, `kind-${kind}.png`) });
+  console.log(`wrote ${path.join(OUT, `kind-${kind}.png`)}`);
 }
 
 const stats = await page.evaluate(() => document.getElementById('hud')?.textContent ?? '');

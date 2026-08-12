@@ -13,7 +13,31 @@ export type ArchetypeId =
   | 'apartSteel2F'
   | 'apartRC3F'
   | 'mansionRC5F'
-  | 'mansionRC9F';
+  | 'mansionRC9F'
+  | 'shophouseWood2F'
+  | 'shophouseRC3F'
+  | 'zakkyoRC5F'
+  | 'zakkyoRC8F'
+  | 'konbiniBox'
+  | 'factoryShed'
+  | 'factoryRC2F'
+  | 'warehouseBox';
+
+/**
+ * What stands on a lot. `LotKind` is this plus `vacant`.
+ *
+ * Declared here rather than beside `LotKind` because it is a property of the
+ * building, and `city/Lots.ts` already imports from this module.
+ */
+export type BuildingKind =
+  | 'house'
+  | 'apart'
+  | 'mansion'
+  | 'shophouse'
+  | 'zakkyo'
+  | 'konbini'
+  | 'factory'
+  | 'warehouse';
 
 export type RoofType = 'flat' | 'shed' | 'gable' | 'hip';
 export type FootprintShape = 'rect' | 'L' | 'U' | 'T';
@@ -40,7 +64,7 @@ export interface StyleVector {
 export interface BuildingSpec {
   archetype: ArchetypeId;
   style: StyleVector;
-  kind: 'house' | 'apart' | 'mansion';
+  kind: BuildingKind;
 
   footprintShape: FootprintShape;
   mirrored: boolean;
@@ -78,8 +102,14 @@ export interface BuildingSpec {
   corridorWidth: number;
   balconyStyle: BalconyStyle;
   balconyDepth: number;
-  /** マンション: rooftop plant. Water tanks only appear on older buildings. */
-  hasPenthouse: boolean;
+  /**
+   * Rooftop plant. A 塔屋 for a マンション or a 雑居ビル, bare condensers for a
+   * single-storey shop, nothing for a house — this was a `hasPenthouse` boolean
+   * until a コンビニ needed the third case, and a lift overrun on a 1F shop is
+   * exactly the kind of detail that reads as wrong without being nameable.
+   */
+  roofPlant: 'none' | 'penthouse' | 'condensers';
+  /** Water tanks only appear on older buildings. */
   hasWaterTank: boolean;
   /** Window grilles (面格子) on ground-floor windows. */
   windowGrilleChance: number;

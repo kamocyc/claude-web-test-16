@@ -31,6 +31,10 @@ const OVERLAY_LAYERS: [OverlayLayer, string][] = [
   ['flagPoles', '旗竿地の竿'],
   ['vacantUnavoidable', '空き地（やむを得ない）'],
   ['vacantAvoidable', '空き地（要調査）'],
+  ['landUse', '用途（敷地の輪郭）'],
+  ['useZones', '用途地域（地区の輪郭）'],
+  ['useFill', '用途（敷地の塗り分け）'],
+  ['zoneFill', '用途地域（地区の塗り分け）'],
 ];
 
 export function createDebugUI(opts: DebugUIOptions): GUI {
@@ -48,6 +52,7 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
     },
     regenerate: () => regenerate(),
     walkMode: () => controls.setMode('walk'),
+    driveMode: () => controls.setMode('drive'),
   };
 
   gui.add(actions, 'seed').name('シード').onFinishChange((v: string) => {
@@ -57,6 +62,7 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   gui.add(actions, 'regenerate').name('再生成');
   gui.add(actions, 'randomSeed').name('ランダムシード');
   gui.add(actions, 'walkMode').name('歩行モード (W)');
+  gui.add(actions, 'driveMode').name('走行モード (C)');
 
   // --- Overlays ------------------------------------------------------------
   const fOverlay = gui.addFolder('デバッグ表示').close();
@@ -104,6 +110,18 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   // The real gate on a scrap: `minLotArea` alone never rejects one.
   fLots.add(params.lots, 'minInscribedRadius', 0.5, 4, 0.1).name('最小内接円の半径');
 
+  // --- Land use ------------------------------------------------------------
+  // Upstream of everything in 用途配分 below: this decides the *map*, that
+  // decides what gets built under it. Changing the industrial share moves the
+  // street grid, so these all force a full regeneration like every other slider.
+  const fUse = gui.addFolder('用途地域').close();
+  fUse.add(params.landUse, 'industrialShare', 0, 0.4, 0.01).name('工業地区の面積比');
+  fUse.add(params.landUse, 'industrialMinStationDist', 0, 600, 10).name('駅から工業までの距離');
+  fUse.add(params.landUse, 'industrialLocalSpacing', 45, 160, 5).name('工業地区の街路間隔');
+  fUse.add(params.landUse, 'commercialCoreRadius', 60, 400, 10).name('駅前商業の半径');
+  fUse.add(params.landUse, 'neighbourhoodRadius', 100, 600, 10).name('近隣商業の広がり');
+  fUse.add(params.landUse, 'quasiIndustrialRing').name('工業を準工業で囲む');
+
   // --- Zoning --------------------------------------------------------------
   const fZone = gui.addFolder('用途配分').close();
   fZone.add(params.zoning, 'mansionMinArea', 200, 900, 10).name('マンション最小面積');
@@ -111,6 +129,14 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fZone.add(params.zoning, 'apartMinArea', 100, 400, 5).name('アパート最小面積');
   fZone.add(params.zoning, 'stationRadius', 200, 1400, 20).name('駅の影響半径');
   fZone.add(params.zoning, 'clusterCutChance', 0, 0.8, 0.02).name('分譲地の分断率');
+  fZone.add(params.landUse, 'commercialShare', 0.04, 0.4, 0.01).name('商業地の面積比');
+  fZone.add(params.zoning, 'shophouseMaxFrontage', 5, 16, 0.5).name('店舗併用住宅の最大間口');
+  fZone.add(params.zoning, 'shophouseMinUrbanity', 0, 1, 0.02).name('商店街になる都市度');
+  fZone.add(params.zoning, 'zakkyoMinUrbanity', 0, 1, 0.02).name('雑居ビル都市度');
+  fZone.add(params.zoning, 'konbiniMinFrontage', 8, 40, 1).name('コンビニ最小間口');
+  fZone.add(params.zoning, 'konbiniPerDistrict', 0, 4, 1).name('地区あたりコンビニ数');
+  fZone.add(params.zoning, 'factoryMinArea', 300, 3000, 50).name('工場の最小面積');
+  fZone.add(params.zoning, 'warehouseMinArea', 600, 4000, 50).name('倉庫の最小面積');
 
   // --- Buildings -----------------------------------------------------------
   const fBuild = gui.addFolder('建物').close();
@@ -132,6 +158,12 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fBuild.add(params.buildings, 'mirrorChance', 0, 1, 0.05).name('ミラーリング率');
   fBuild.add(params.buildings, 'orientationJitter', 0, 8, 0.1).name('向きのばらつき(度)');
   fBuild.add(params.buildings, 'bayAlignChance', 0, 1, 0.05).name('上下階の開口を揃える');
+  fBuild.add(params.buildings, 'zakkyoFar', 1, 8, 0.1).name('容積率(雑居ビル)');
+  fBuild.add(params.buildings, 'zakkyoHeightLimit', 12, 45, 1).name('絶対高さ制限(商業)');
+  fBuild.add(params.buildings, 'industrialHeightLimit', 8, 30, 0.5).name('絶対高さ制限(工業)');
+  fBuild.add(params.buildings, 'konbiniCoverage', 0.15, 0.7, 0.01).name('建ぺい率(コンビニ)');
+  fBuild.add(params.buildings, 'awningDepth', 0, 2.5, 0.1).name('庇の出');
+  fBuild.add(params.buildings, 'signBandHeight', 0, 1.6, 0.05).name('看板帯の高さ');
 
   // The single most visible setting in the generator: what the town reads as
   // from the air. Parts, not percentages — the sampler renormalises.
@@ -153,6 +185,7 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fProps.add(params.props, 'parking').name('駐車場・カーポート');
   fProps.add(params.props, 'gates').name('門柱・郵便受け');
   fProps.add(params.props, 'vegetation').name('庭木・植木鉢');
+  fProps.add(params.props, 'signage').name('看板・のぼり・自販機');
   fProps.add(params.props, 'carChance', 0, 1, 0.05).name('駐車率');
   fProps.add(params.props, 'carportChance', 0, 1, 0.05).name('カーポート率');
 

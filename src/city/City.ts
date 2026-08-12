@@ -30,7 +30,7 @@ export function generateCity(params: CityParams): City {
     return r;
   };
 
-  const roads = clock('roads', () => generateRoads(params.seed, params.roads));
+  const roads = clock('roads', () => generateRoads(params.seed, params.roads, params.landUse));
   const extraction = clock('blocks', () =>
     extractBlocks(roads, params.seed, {
       ...DEFAULT_BLOCK_OPTIONS,

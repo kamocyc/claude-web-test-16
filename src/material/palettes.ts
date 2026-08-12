@@ -50,6 +50,51 @@ export const WALL_RC_TILE: readonly (readonly [number, number])[] = [
 ] as const;
 
 /**
+ * ALC・押出成形セメント板 — the panel cladding of a post-war 雑居ビル and of the
+ * office end of a factory. Paler and flatter than 二丁掛タイル.
+ */
+export const WALL_ALC: readonly (readonly [number, number])[] = [
+  [0xd8d6cf, 4],
+  [0xc9c6bd, 4],
+  [0xb9b3a6, 2],
+  [0x9aa0a4, 2],
+  [0xe2ded3, 3],
+] as const;
+
+/**
+ * The pale grey-blue, sage and cream of a Japanese factory shed. Industrial
+ * cladding is not grey: it is *nearly* grey, tinted, and that tint is most of
+ * what stops an industrial estate reading as a row of concrete blocks.
+ */
+export const WALL_INDUSTRIAL: readonly (readonly [number, number])[] = [
+  [0xc3cad0, 4],
+  [0xdad9d4, 4],
+  [0xb9c0b4, 2],
+  [0xa8bccd, 2.5],
+  [0xd4cbb8, 2],
+] as const;
+
+/**
+ * 看板 bands and shopfront frames.
+ *
+ * Weighted toward the muted, following the same discipline as the wall tables:
+ * a shopping street is not a row of primary colours, it is dark green, maroon
+ * and off-white with the occasional loud one. The saturated colours live in
+ * `SIGN_FACE`, which only ever reaches a 袖看板 panel a metre across.
+ */
+export const SHOPFRONT: readonly (readonly [number, number])[] = [
+  [0x9e3b34, 3],
+  [0x2f4a70, 3],
+  [0x2e6047, 2],
+  [0xe8e2d3, 3],
+  [0x2a2a2c, 1.5],
+  [0x7a5a2e, 1.5],
+] as const;
+
+/** Projecting sign faces — the one place saturation is allowed off the leash. */
+export const SIGN_FACE = [0xd93b30, 0xf0b429, 0x1c74bd, 0x1f9d55, 0xf5f2ea, 0xe8622c] as const;
+
+/**
  * Roof colour families. The mix between these is the single most visible
  * parameter in the whole generator — it is what the town reads as from the air —
  * so it is a *setting* (`buildings.roofHueMix`) rather than a weight buried in a
@@ -67,6 +112,22 @@ export const ROOF_METAL: RoofPalette = [
   [0x5c626a, 2, 'grey'], // 銀黒
   [0x474d52, 1.2, 'grey'], // black
   [0x5c7a72, 1, 'green'], // 青緑
+] as const;
+
+/**
+ * 折板 — the ribbed steel roof of every factory and warehouse.
+ *
+ * Tagged with the same `RoofHue` families as the domestic palettes on purpose,
+ * so `sampleRoofColor` and the `roofHueMix` setting still govern the industrial
+ * quarter. A separate untagged table would have quietly exempted a fifth of the
+ * town's roof area from the one setting that decides what it reads as from the air.
+ */
+export const ROOF_RIBBED: RoofPalette = [
+  [0xa8adb2, 4, 'grey'],
+  [0xb9bcb5, 2, 'grey'],
+  [0x6f7d8c, 2, 'navy'],
+  [0x5d7060, 1.5, 'green'],
+  [0x8a5a44, 1.5, 'redBrown'],
 ] as const;
 
 export const ROOF_KAWARA: RoofPalette = [

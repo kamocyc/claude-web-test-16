@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import type { Polygon, Vec2 } from '../core/types.js';
 import * as V from '../geom/vec2.js';
+import type { UseZone } from '../core/params.js';
 import type { City } from '../city/City.js';
+import type { LotKind } from '../city/Lots.js';
 import { UNAVOIDABLE_VACANCY } from '../building/types.js';
 
 /**
@@ -19,7 +21,11 @@ export type OverlayLayer =
   | 'footprints'
   | 'flagPoles'
   | 'vacantUnavoidable'
-  | 'vacantAvoidable';
+  | 'vacantAvoidable'
+  | 'landUse'
+  | 'useZones'
+  | 'zoneFill'
+  | 'useFill';
 
 const COLORS: Record<OverlayLayer, number> = {
   roads: 0x4aa3ff,
@@ -33,6 +39,41 @@ const COLORS: Record<OverlayLayer, number> = {
   // land nothing belongs on, red is a lot the generator failed to use.
   vacantUnavoidable: 0x9aa0a6,
   vacantAvoidable: 0xff2d55,
+  // Legend colour only; these four are drawn per vertex.
+  landUse: 0x63e08a,
+  useZones: 0xffb03a,
+  zoneFill: 0x9a6bff,
+  useFill: 0x63e08a,
+};
+
+/**
+ * Lot colours by use.
+ *
+ * A `Record<LotKind, …>` rather than a lookup with a white fallback. It was the
+ * latter, and the five uses added after it was written all came out white —
+ * which reads as a rendering fault rather than as "nobody assigned a colour",
+ * and is invisible until you look at a town that has them.
+ */
+const KIND_COLORS: Record<LotKind, number> = {
+  house: 0x63e08a,
+  apart: 0x3fbf7f,
+  mansion: 0x2f8fd0,
+  shophouse: 0xffb03a,
+  zakkyo: 0xff5fa2,
+  konbini: 0x00d0d0,
+  factory: 0x9a6bff,
+  warehouse: 0x7a7f8a,
+  vacant: 0x9aa0a6,
+};
+
+/** District outline colours by 用途地域. */
+const ZONE_COLORS: Record<UseZone, number> = {
+  lowRise: 0x63e08a,
+  midRise: 0x3fbf7f,
+  neighbourCom: 0xffb03a,
+  commercial: 0xff5fa2,
+  quasiIndust: 0xc0a060,
+  industrial: 0x9a6bff,
 };
 
 const HEIGHTS: Record<OverlayLayer, number> = {
@@ -45,11 +86,16 @@ const HEIGHTS: Record<OverlayLayer, number> = {
   flagPoles: 0.5,
   vacantUnavoidable: 0.65,
   vacantAvoidable: 0.66,
+  landUse: 0.47,
+  useZones: 0.3,
+  // Below the line layers, so an outline drawn over a fill still reads.
+  zoneFill: 0.12,
+  useFill: 0.16,
 };
 
 export class DebugOverlay {
   readonly group = new THREE.Group();
-  private layers = new Map<OverlayLayer, THREE.LineSegments>();
+  private layers = new Map<OverlayLayer, THREE.Object3D>();
   private enabled = new Set<OverlayLayer>();
 
   constructor(parent: THREE.Object3D) {
@@ -127,14 +173,103 @@ export class DebugOverlay {
       'vacantAvoidable',
       crossedRings(avoidable.map((l) => l.polygon), HEIGHTS.vacantAvoidable),
     );
+
+    // Land use, coloured per ring rather than per layer. Judging whether the
+    // zoning worked from the finished buildings is as hopeless as judging
+    // subdivision from them: a 工場 and a マンション are both big pale boxes from
+    // above. The district layer in particular is what answers the one question
+    // the flood fill exists to answer — is the industrial belt actually one
+    // piece, or has it broken into islands?
+    const lotRings = ringSegmentsColored(
+      city.lots.map((l) => ({
+        poly: l.polygon,
+        color: KIND_COLORS[l.zonedKind],
+      })),
+      HEIGHTS.landUse,
+    );
+    this.addLayer('landUse', lotRings.positions, lotRings.colors);
+
+    const zoneRings = ringSegmentsColored(
+      city.roads.districts.map((d) => ({ poly: d.polygon, color: ZONE_COLORS[d.zone] })),
+      HEIGHTS.useZones,
+    );
+    this.addLayer('useZones', zoneRings.positions, zoneRings.colors);
+
+    // Filled, not just outlined. An outline tells you where a boundary is; a
+    // wash tells you how much of the town each 用途地域 got, which is the
+    // question the area ceilings exist to answer and the one an outline is
+    // worst at — a big district and a small one look the same as two rings.
+    this.addFillLayer(
+      'zoneFill',
+      city.roads.districts.map((d) => ({ poly: d.polygon, color: ZONE_COLORS[d.zone] })),
+      HEIGHTS.zoneFill,
+    );
+    this.addFillLayer(
+      'useFill',
+      city.lots.map((l) => ({ poly: l.polygon, color: KIND_COLORS[l.zonedKind] })),
+      HEIGHTS.useFill,
+    );
   }
 
-  private addLayer(layer: OverlayLayer, positions: number[]): void {
+  /**
+   * A translucent wash over a set of rings, coloured per ring.
+   *
+   * Unlit and depth-test-free like the line layers, so it reads over the roofs
+   * from any angle rather than being hidden by the town it describes.
+   */
+  private addFillLayer(
+    layer: OverlayLayer,
+    rings: { poly: Polygon; color: number }[],
+    h: number,
+  ): void {
+    const positions: number[] = [];
+    const colors: number[] = [];
+    const c = new THREE.Color();
+    for (const { poly, color } of rings) {
+      if (poly.length < 3) continue;
+      c.setHex(color, THREE.SRGBColorSpace);
+      // Fan triangulation is wrong on a concave ring, and district faces are
+      // routinely concave, so go through the same ear clipper the roofs use.
+      const shape = poly.map((p) => new THREE.Vector2(p.x, p.y));
+      for (const tri of THREE.ShapeUtils.triangulateShape(shape, [])) {
+        for (const i of tri) {
+          const p = poly[i]!;
+          positions.push(p.x, h, p.y);
+          colors.push(c.r, c.g, c.b);
+        }
+      }
+    }
+    if (positions.length === 0) return;
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    const mat = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.42,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: false,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.renderOrder = 998;
+    mesh.visible = this.enabled.has(layer);
+    mesh.frustumCulled = false;
+    this.group.add(mesh);
+    this.layers.set(layer, mesh);
+  }
+
+  private addLayer(layer: OverlayLayer, positions: number[], colors?: number[]): void {
     if (positions.length === 0) return;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    // `LineBasicMaterial` takes one colour for the whole layer, so a layer that
+    // distinguishes categories has to carry them per vertex.
+    if (colors) geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     const mat = new THREE.LineBasicMaterial({
-      color: COLORS[layer],
+      ...(colors ? { vertexColors: true } : { color: COLORS[layer] }),
       transparent: true,
       opacity: 0.9,
       depthTest: false,
@@ -149,10 +284,11 @@ export class DebugOverlay {
   }
 
   clear(): void {
-    for (const mesh of this.layers.values()) {
-      this.group.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.Material).dispose();
+    for (const object of this.layers.values()) {
+      this.group.remove(object);
+      const mesh = object as THREE.Mesh;
+      mesh.geometry?.dispose();
+      (mesh.material as THREE.Material | undefined)?.dispose();
     }
     this.layers.clear();
   }
@@ -183,6 +319,26 @@ function crossedRings(polys: Polygon[], h: number): number[] {
     out.push(minX, h, maxY, maxX, h, minY);
   }
   return out;
+}
+
+/** Ring outlines with a colour per ring, for the category layers. */
+function ringSegmentsColored(
+  rings: { poly: Polygon; color: number }[],
+  h: number,
+): { positions: number[]; colors: number[] } {
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const c = new THREE.Color();
+  for (const { poly, color } of rings) {
+    c.setHex(color, THREE.SRGBColorSpace);
+    for (let i = 0, n = poly.length; i < n; i++) {
+      const a: Vec2 = poly[i]!;
+      const b: Vec2 = poly[(i + 1) % n]!;
+      positions.push(a.x, h, a.y, b.x, h, b.y);
+      colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
+  }
+  return { positions, colors };
 }
 
 function ringSegments(polys: Polygon[], h: number): number[] {

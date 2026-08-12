@@ -1,9 +1,10 @@
 import type { Vec2 } from '../core/types.js';
-import type { RoadClass, RoadParams } from '../core/params.js';
+import type { LandUseParams, RoadClass, RoadParams } from '../core/params.js';
 import * as V from '../geom/vec2.js';
 import { makePlanar, PlanarGraph, splitEdgesAtNodes } from '../geom/planarGraph.js';
 import { generateSkeleton } from './RoadSkeleton.js';
 import { partitionDistricts, type District } from './RoadDistricts.js';
+import { assignLandUse } from './LandUse.js';
 import { districtStreets } from './RoadGrid.js';
 import { enforceClearance, pruneShortStubs, readEdges } from './RoadClearance.js';
 
@@ -73,12 +74,21 @@ export function roadWidth(cls: RoadClass, p: RoadParams): number {
   }
 }
 
-export function generateRoads(seed: string, p: RoadParams): RoadNetwork {
+export function generateRoads(seed: string, p: RoadParams, landUse: LandUseParams): RoadNetwork {
   const E = p.extent;
 
   // --- 1. Tier-1, and the districts it cuts the town into ------------------
   const skeleton = generateSkeleton(seed, p);
   const { graph: tier1, districts } = partitionDistricts(seed, skeleton, p);
+
+  // --- 1b. 用途地域 --------------------------------------------------------
+  // Land use is settled here, in the middle of road generation, rather than
+  // downstream with the rest of the zoning. It has to be: an industrial
+  // district lays a coarser street grid than a residential one, and the grid is
+  // laid in the next step. This is the one place a downstream concept reaches
+  // back upstream, and it is not avoidable — a 45 m grid cannot hold a factory
+  // parcel no matter what the lot parameters say.
+  assignLandUse(districts, skeleton.station, E, seed, landUse);
 
   // --- 2. Tier-2: each district's own grid ---------------------------------
   const raw = new PlanarGraph(p.nodeSnap);
@@ -86,7 +96,7 @@ export function generateRoads(seed: string, p: RoadParams): RoadNetwork {
     raw.addSegment(tier1.node(e.a).p, tier1.node(e.b).p, e.data);
   }
   for (const d of districts) {
-    for (const line of districtStreets(d, p)) {
+    for (const line of districtStreets(d, p, landUse)) {
       for (let i = 0; i + 1 < line.pts.length; i++) {
         raw.addSegment(line.pts[i]!, line.pts[i + 1]!, {
           cls: line.cls,

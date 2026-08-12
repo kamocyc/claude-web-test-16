@@ -24,7 +24,25 @@ export type PropType =
   | 'carBody'
   | 'carCabin'
   | 'acUnit'
-  | 'bicycle';
+  | 'bicycle'
+  // --- Commercial -----------------------------------------------------------
+  /** The pole of a 自立看板 out at the pavement. */
+  | 'signPole'
+  /** Its face, and the face of a コンビニ's parapet sign. */
+  | 'signPanel'
+  /** 袖看板 — a sign projecting at right angles from a wall, read along the street. */
+  | 'wallSign'
+  /** のぼり — a tall narrow banner on a pole. */
+  | 'bannerFlag'
+  | 'vendingMachine'
+  | 'vendingFront'
+  | 'bollard'
+  // --- Industrial -----------------------------------------------------------
+  | 'truckBody'
+  | 'truckCab'
+  | 'containerBox'
+  | 'dockBumper'
+  | 'palletStack';
 
 interface PropInstance {
   matrix: THREE.Matrix4;
@@ -51,6 +69,18 @@ const DEFS: Record<PropType, PropDef> = {
   carCabin: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'glass', castShadow: false },
   acUnit: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'metal', castShadow: false },
   bicycle: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'metal', castShadow: false },
+  signPole: { geometry: () => new THREE.CylinderGeometry(0.5, 0.5, 1, 6), family: 'metal', castShadow: true },
+  signPanel: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'metal', castShadow: true },
+  wallSign: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'metal', castShadow: true },
+  bannerFlag: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'metal', castShadow: false },
+  vendingMachine: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'metal', castShadow: true },
+  vendingFront: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'glass', castShadow: false },
+  bollard: { geometry: () => new THREE.CylinderGeometry(0.5, 0.5, 1, 8), family: 'metal', castShadow: false },
+  truckBody: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'metal', castShadow: true },
+  truckCab: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'metal', castShadow: true },
+  containerBox: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'metal', castShadow: true },
+  dockBumper: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'metal', castShadow: false },
+  palletStack: { geometry: () => new THREE.BoxGeometry(1, 1, 1), family: 'concrete', castShadow: true },
 };
 
 /**
@@ -138,7 +168,7 @@ export class PropRegistry {
   get triangleCount(): number {
     let n = 0;
     for (const [type, list] of this.instances) {
-      const per = type === 'shrub' ? 80 : type === 'pot' ? 28 : 12;
+      const per = type === 'shrub' ? 80 : type === 'pot' || type === 'signPole' || type === 'bollard' ? 28 : 12;
       n += list.length * per;
     }
     return n;

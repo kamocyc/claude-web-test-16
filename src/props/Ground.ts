@@ -5,16 +5,23 @@ import * as V from '../geom/vec2.js';
 import { GeometryBuffer } from '../build/GeometryBuffer.js';
 import type { MaterialLibrary } from '../material/materials.js';
 import type { City } from '../city/City.js';
+import type { BuiltBuilding } from '../building/Builder.js';
+import { KIND_RULES } from '../building/kinds.js';
 
 /**
- * Ground plane, road surfaces and kerbs.
+ * Ground plane, road surfaces, kerbs and the hardstanding on paved lots.
  *
  * Roads are ribbons of quads at y = 0.02 with a light concrete gutter strip
  * along each edge — the 側溝 that runs beside every Japanese local street. No
  * markings: this build deliberately leaves out road paint, guardrails and
  * street furniture.
  */
-export function buildGround(city: City, params: CityParams, materials: MaterialLibrary): THREE.Group {
+export function buildGround(
+  city: City,
+  params: CityParams,
+  materials: MaterialLibrary,
+  buildings: BuiltBuilding[] = [],
+): THREE.Group {
   const group = new THREE.Group();
   group.name = 'ground';
 
@@ -113,6 +120,8 @@ export function buildGround(city: City, params: CityParams, materials: MaterialL
     addRibbon(lane.a, lane.b, lane.width, { start: false, end: false });
   }
 
+  buildLotSurfaces(buildings, asphalt, kerb);
+
   for (const [buf, family] of [
     [asphalt, 'asphalt'],
     [kerb, 'concrete'],
@@ -126,4 +135,63 @@ export function buildGround(city: City, params: CityParams, materials: MaterialL
   }
 
   return group;
+}
+
+/**
+ * Asphalt over the whole of a コンビニ, 工場 or 倉庫 lot, plus parking bays.
+ *
+ * **The whole lot, deliberately not the lot minus the building.** That
+ * difference is an annulus, and this pipeline drops holes — the same trap that
+ * once made `carPad` come back as the entire lot, parked the car inside the
+ * house and suppressed every shrub on the parcel. Capping the lot and letting
+ * the building's own plinth sit on top of it sidesteps the boolean entirely,
+ * and is also what the real thing looks like: the slab was poured first.
+ */
+function buildLotSurfaces(
+  buildings: BuiltBuilding[],
+  asphalt: GeometryBuffer,
+  lines: GeometryBuffer,
+): void {
+  for (const b of buildings) {
+    if (!KIND_RULES[b.spec.kind].pavedLot) continue;
+
+    asphalt.setColor({ r: 0.185, g: 0.187, b: 0.196 });
+    asphalt.pushCap(b.lot.polygon, 0.025, true);
+
+    // Bays along the frontage, only for the shop — a factory yard is not marked
+    // out in spaces, it is turning room for a lorry.
+    if (b.spec.kind !== 'konbini') continue;
+    const f = b.lot.frontages[0];
+    if (!f) continue;
+    const inward = V.neg(f.outward);
+    const bayWidth = 2.5;
+    // Only as deep as the gap actually is. The building is set well back, but a
+    // shallow plot makes the concession ladder pull it forward, and a bay drawn
+    // to its nominal depth would then run under the shop.
+    let clear = Infinity;
+    for (const p of b.footprint.outline) {
+      clear = Math.min(clear, V.dot(V.sub(p, f.mid), inward));
+    }
+    const bayDepth = Math.min(5.0, Math.max(0, clear - 0.3));
+    if (bayDepth < 2.0) continue;
+    const n = Math.floor((f.len - 1.0) / bayWidth);
+    lines.setColor({ r: 0.86, g: 0.86, b: 0.83 });
+    for (let i = 0; i <= n; i++) {
+      const u = 0.5 + i * bayWidth;
+      if (u > f.len - 0.5) break;
+      const p = V.addScaled(f.a, f.dir, u);
+      const q = V.addScaled(p, inward, bayDepth);
+      const side = V.scale(f.dir, 0.06);
+      lines.pushCap(
+        [
+          { x: p.x - side.x, y: p.y - side.y },
+          { x: p.x + side.x, y: p.y + side.y },
+          { x: q.x + side.x, y: q.y + side.y },
+          { x: q.x - side.x, y: q.y - side.y },
+        ],
+        0.032,
+        true,
+      );
+    }
+  }
 }

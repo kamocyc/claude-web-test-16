@@ -38,6 +38,17 @@ export interface RoofTarget {
 export interface RoofResult {
   /** Height of the roof's highest point above the eave line. */
   peak: number;
+  /**
+   * Height above the eave line of the surface things *stand on*.
+   *
+   * Distinct from `peak`, and the distinction is not academic: on a flat roof
+   * the peak is the top of the parapet, so anything placed at `peak` floats a
+   * whole parapet above the slab. That is precisely what the rooftop plant did
+   * — a 塔屋 and five condensers hovering a metre over every マンション in the
+   * town, hidden behind the upstand from street level and plainly wrong from the
+   * air. A pitched roof has no deck, and reports its eave line.
+   */
+  deck: number;
   /** Plan polygon of the eaves, for props that need to avoid the overhang. */
   envelope: Polygon;
 }
@@ -91,7 +102,7 @@ function buildFlatRoof(
   // Prism gives the outer face, the inner face is hidden, and the cap is the
   // coping — 笠木 — that every Japanese parapet has.
   buf.pushPrism(ring, eaveY, eaveY + spec.parapetHeight, true, false);
-  return { peak: spec.parapetHeight, envelope: ring };
+  return { peak: spec.parapetHeight, deck: 0.05, envelope: ring };
 }
 
 /** 片流れ: a single plane. Exact on any polygon — height is affine in (x, z). */
@@ -148,7 +159,7 @@ function buildShedRoof(
     false,
   );
   buf.pushSkirt(envelope, eaveY - FASCIA, heightAt, 0.02);
-  return { peak: span * pitch, envelope };
+  return { peak: span * pitch, deck: 0, envelope };
 }
 
 /** 切妻 / 寄棟, built per constituent rectangle. */
@@ -209,7 +220,7 @@ function buildPitchedRoof(
     }
   }
 
-  return { peak, envelope };
+  return { peak, deck: 0, envelope };
 }
 
 interface RoofFace {
