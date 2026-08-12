@@ -3,10 +3,13 @@ import type { LandUseParams, RoadClass, RoadParams } from '../core/params.js';
 import * as V from '../geom/vec2.js';
 import { makePlanar, PlanarGraph, splitEdgesAtNodes } from '../geom/planarGraph.js';
 import { generateSkeleton } from './RoadSkeleton.js';
+import { growSkeleton } from './RoadGrowth.js';
 import { partitionDistricts, type District } from './RoadDistricts.js';
 import { assignLandUse } from './LandUse.js';
 import { districtStreets } from './RoadGrid.js';
-import { enforceClearance, pruneShortStubs, readEdges } from './RoadClearance.js';
+import { enforceClearance, pruneShortStubs, pruneTier1Spurs, readEdges } from './RoadClearance.js';
+import type { Terrain } from '../terrain/Terrain.js';
+import type { ObstacleField } from '../terrain/Obstacles.js';
 
 export type { RoadClass } from '../core/params.js';
 
@@ -39,6 +42,8 @@ export type { RoadClass } from '../core/params.js';
 export interface RoadEdgeData {
   cls: RoadClass;
   width: number;
+  /** The growth step that laid this road. 0 for a town generated all at once. */
+  gen: number;
 }
 
 export interface RoadEdge {
@@ -47,6 +52,7 @@ export interface RoadEdge {
   b: number;
   cls: RoadClass;
   width: number;
+  gen: number;
 }
 
 export interface RoadNetwork {
@@ -74,11 +80,19 @@ export function roadWidth(cls: RoadClass, p: RoadParams): number {
   }
 }
 
-export function generateRoads(seed: string, p: RoadParams, landUse: LandUseParams): RoadNetwork {
+export function generateRoads(
+  seed: string,
+  p: RoadParams,
+  landUse: LandUseParams,
+  terrain: Terrain,
+  obstacles: ObstacleField,
+): RoadNetwork {
   const E = p.extent;
 
   // --- 1. Tier-1, and the districts it cuts the town into ------------------
-  const skeleton = generateSkeleton(seed, p);
+  const skeleton = p.growth.enabled
+    ? growSkeleton(seed, p, terrain, obstacles)
+    : generateSkeleton(seed, p, terrain, obstacles);
   const { graph: tier1, districts } = partitionDistricts(seed, skeleton, p);
 
   // --- 1b. 用途地域 --------------------------------------------------------
@@ -96,11 +110,15 @@ export function generateRoads(seed: string, p: RoadParams, landUse: LandUseParam
     raw.addSegment(tier1.node(e.a).p, tier1.node(e.b).p, e.data);
   }
   for (const d of districts) {
-    for (const line of districtStreets(d, p, landUse)) {
+    // Land the town has not reached yet gets no streets. It is still fields.
+    if (!d.developed) continue;
+    for (const line of districtStreets(d, p, landUse, obstacles)) {
       for (let i = 0; i + 1 < line.pts.length; i++) {
         raw.addSegment(line.pts[i]!, line.pts[i + 1]!, {
           cls: line.cls,
           width: roadWidth(line.cls, p),
+          // A district's streets are as old as the face that enclosed them.
+          gen: d.generation,
         } satisfies RoadEdgeData);
       }
     }
@@ -116,6 +134,7 @@ export function generateRoads(seed: string, p: RoadParams, landUse: LandUseParam
   for (const e of planar.edges) {
     const data = e.data as RoadEdgeData | undefined;
     const cls = data?.cls ?? 'local';
+    const gen = data?.gen ?? 0;
     const a = planar.node(e.a).p;
     const b = planar.node(e.b).p;
     if (cls === 'local' && V.dist(a, b) < 6) continue;
@@ -124,7 +143,7 @@ export function generateRoads(seed: string, p: RoadParams, landUse: LandUseParam
     // done their job of forcing a real crossing at the junction.
     const mid = V.lerp(a, b, 0.5);
     if (Math.abs(mid.x) > E + 0.01 || Math.abs(mid.y) > E + 0.01) continue;
-    trimmed.addSegment(a, b, { cls, width: roadWidth(cls, p) } satisfies RoadEdgeData);
+    trimmed.addSegment(a, b, { cls, width: roadWidth(cls, p), gen } satisfies RoadEdgeData);
   }
 
   // Rebuilding snaps nodes together again, which can reintroduce a crossing
@@ -156,7 +175,10 @@ export function generateRoads(seed: string, p: RoadParams, landUse: LandUseParam
     privateLanes: [],
   };
   const cleared = enforceClearance(net, p);
-  graph = cleared.graph;
+  // Clearance deletes whole spans, and deleting the span a collector hung off
+  // strands the collector. So the Tier-1 dead-end check runs after it, not
+  // before — see `pruneTier1Spurs`.
+  graph = pruneTier1Spurs(cleared.graph, p); // TEMP-PROBE
   edges = readEdges(graph, p);
 
   net.graph = graph;

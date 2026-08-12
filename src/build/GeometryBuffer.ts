@@ -130,6 +130,30 @@ export class GeometryBuffer {
     this.idx.push(i0, i1, i2);
   }
 
+  /**
+   * A triangle with a normal per *vertex*.
+   *
+   * Everything else in this class takes one normal per face, which is right for
+   * a building: walls and roof planes are flat and their creases are real. The
+   * ground is the exception — it is one continuous curved surface, and faceted
+   * shading over a hundred thousand triangles of hillside reads as a fault
+   * rather than as terrain.
+   */
+  pushTriangleN(
+    a: THREE.Vector3Like,
+    b: THREE.Vector3Like,
+    c: THREE.Vector3Like,
+    na: THREE.Vector3Like,
+    nb: THREE.Vector3Like,
+    nc: THREE.Vector3Like,
+    uvs: [number, number][],
+  ): void {
+    const i0 = this.vertex(a.x, a.y, a.z, na.x, na.y, na.z, uvs[0]![0], uvs[0]![1]);
+    const i1 = this.vertex(b.x, b.y, b.z, nb.x, nb.y, nb.z, uvs[1]![0], uvs[1]![1]);
+    const i2 = this.vertex(c.x, c.y, c.z, nc.x, nc.y, nc.z, uvs[2]![0], uvs[2]![1]);
+    this.idx.push(i0, i1, i2);
+  }
+
   /** Axis-aligned box given centre and size. */
   pushBox(cx: number, cy: number, cz: number, sx: number, sy: number, sz: number): void {
     const x0 = cx - sx / 2;

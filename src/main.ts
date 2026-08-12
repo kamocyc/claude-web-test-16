@@ -13,6 +13,7 @@ import { Viewer } from './app/Viewer.js';
 import { Environment } from './app/Environment.js';
 import { Controls } from './app/Controls.js';
 import { DebugOverlay } from './app/DebugOverlay.js';
+import * as V3 from './geom/vec2.js';
 
 const container = document.getElementById('app')!;
 const hud = document.getElementById('hud')!;
@@ -36,6 +37,10 @@ let generateMs = 0;
 function regenerate(): void {
   loading.classList.remove('hidden');
   loading.textContent = '街を生成しています…';
+  // Cleared here, not just set at the end: the screenshot tool waits on this
+  // flag, and after the first town it is already true — so every `__setSeed` or
+  // `__setAge` shot was taken of the *previous* town.
+  (window as unknown as { __cityReady?: boolean }).__cityReady = false;
 
   // Yield a frame so the overlay actually paints before the blocking build.
   requestAnimationFrame(() => {
@@ -50,6 +55,14 @@ function regenerate(): void {
     viewer.scene.add(mesh.group);
     overlay.rebuild(city, { buildable: mesh.buildableDebug, footprints: mesh.footprintDebug });
     controls.setObstacles(mesh.footprintDebug);
+    // Walking follows the ground and whatever platform has been cut into it;
+    // driving follows the carriageway, which is graded and does not.
+    const padGrid = makePadSampler(city);
+    controls.setGround(
+      (x, z) => padGrid(x, z) ?? city!.terrain.heightAtXY(x, z),
+      (x, z) =>
+        city!.roadHeights.nearestRoadHeight({ x, y: z }, 24) ?? city!.terrain.heightAtXY(x, z),
+    );
     // Re-exposed on every regeneration rather than in the static handle block
     // below, because it is a different set of polygons each time. Used to check
     // from the console — or from a script — that the street modes really are
@@ -117,10 +130,43 @@ if (import.meta.env.DEV) {
   params.seed = seed;
   regenerate();
 };
+/** The town's age, for the shot tool: `--age 10` beside `--seed`. */
+(window as unknown as Record<string, unknown>).__setAge = (steps: number) => {
+  params.roads.growth.steps = steps;
+  regenerate();
+};
 (window as unknown as Record<string, unknown>).__setLayout = (layout: RoadLayout) => {
   applyRoadLayout(params.roads, layout);
   regenerate();
 };
+
+/**
+ * A coarse raster of levelled pad heights, so walking does not sink through the
+ * 擁壁 it just walked past.
+ *
+ * The terrain says where the *land* is; a lot has been cut to a level platform
+ * a metre or two off it, and that platform is what you are standing on for most
+ * of a walk through this town. Rasterised rather than searched, because this is
+ * sampled once a frame and a linear scan over fifteen hundred lots is not.
+ */
+function makePadSampler(city: City): (x: number, z: number) => number | null {
+  const cell = 8;
+  const grid = new Map<number, number>();
+  for (const lot of city.lots) {
+    const pad = lot.platform.padY;
+    if (pad === 0 && !city.terrain.field) continue;
+    for (const q of lot.polygon) {
+      const key = Math.floor(q.x / cell) * 100000 + Math.floor(q.y / cell);
+      const prev = grid.get(key);
+      if (prev === undefined || pad > prev) grid.set(key, pad);
+    }
+    const c = lot.centroid;
+    const key = Math.floor(c.x / cell) * 100000 + Math.floor(c.y / cell);
+    const prev = grid.get(key);
+    if (prev === undefined || pad > prev) grid.set(key, pad);
+  }
+  return (x, z) => grid.get(Math.floor(x / cell) * 100000 + Math.floor(z / cell)) ?? null;
+}
 
 /** Even-odd point in ring, for the street-view helper above. */
 function pointInRing(poly: { x: number; y: number }[], p: { x: number; y: number }): boolean {
@@ -200,6 +246,52 @@ Object.assign(window as unknown as Record<string, unknown>, {
     return [
       [c.x + r * 0.2, r * 1.1, c.y + r],
       [c.x, 0, c.y],
+    ];
+  },
+  /**
+   * A camera on the street below the tallest 擁壁 in the town.
+   *
+   * The fixed views cannot find one: a retaining wall is wherever the land
+   * happened to fall away, which moves with the seed, and the whole point of
+   * this feature is only legible from the low side of one.
+   */
+  __wallView: (): [[number, number, number], [number, number, number]] | null => {
+    if (!city) return null;
+    let best: { lot: (typeof city.lots)[number]; drop: number } | null = null;
+    for (const lot of city.lots) {
+      if (!lot.frontages[0]) continue;
+      for (const e of lot.platform.edges) {
+        if (e.kind !== 'wall') continue;
+        if (!best || e.worst > best.drop) best = { lot, drop: e.worst };
+      }
+    }
+    if (!best) return null;
+    const f = best.lot.frontages[0]!;
+    // Back off across the street and up a little, looking down the frontage.
+    // Standing at eye height directly under the wall puts the rising ground
+    // between the camera and the thing it is meant to show.
+    const eye = V3.addScaled(V3.addScaled(f.mid, f.outward, 22), f.dir, 14);
+    const ground = city.roadHeights.nearestRoadHeight(eye, 60) ?? city.terrain.heightAt(eye);
+    return [
+      [eye.x, ground + 7, eye.y],
+      [f.mid.x, best.lot.platform.padY - best.drop * 0.5, f.mid.y],
+    ];
+  },
+  /** Standing on the bank of the river, looking along it. */
+  __riverView: (): [[number, number, number], [number, number, number]] | null => {
+    const r = city?.terrain.river;
+    if (!r || !city) return null;
+    const i = Math.floor(r.centre.length / 2);
+    const a = r.centre[i]!;
+    const b = r.centre[Math.min(r.centre.length - 1, i + 3)]!;
+    const d = V3.normalize(V3.sub(b, a));
+    const n = V3.perp(d);
+    // Well back and well up: the bank is built right to the water now, so a
+    // camera at the old 34 m stood inside somebody's second floor.
+    const eye = V3.addScaled(V3.addScaled(a, n, 70), d, -70);
+    return [
+      [eye.x, city.terrain.heightAt(eye) + 30, eye.y],
+      [b.x, r.water[i]!, b.y],
     ];
   },
   __zoneCentre: (zone: string): [number, number] | null => {

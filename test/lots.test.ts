@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PARAMS, cloneParams } from '../src/core/params.js';
-import { generateRoads } from '../src/city/Roads.js';
+import { roadsFor } from './helpers.js';
 import { extractBlocks } from '../src/city/Blocks.js';
 import { subdivideBlock, type Lot } from '../src/city/Lots.js';
 import { area, isSimple, isCCW } from '../src/geom/polygon.js';
@@ -17,7 +17,7 @@ function buildLots(seed: string) {
   const params = cloneParams(DEFAULT_PARAMS);
   params.seed = seed;
   params.roads.extent = 190; // smaller town keeps the test fast
-  const roads = generateRoads(params.seed, params.roads, params.landUse);
+  const roads = roadsFor(params);
   const { blocks } = extractBlocks(roads, params.seed);
   const lots: Lot[] = [];
   for (const b of blocks) lots.push(...subdivideBlock(b, roads, params, lots.length));
@@ -107,6 +107,8 @@ describe('lot subdivision invariants', () => {
     }
   });
 
+  // An explicit timeout, like its neighbours: generating the land as well as the
+  // town puts this over vitest's 5 s default.
   it('lots stay inside their block', () => {
     const { blocks, lots } = buildLots('inside-1');
     const blockById = new Map(blocks.map((b) => [b.id, b]));
@@ -115,7 +117,7 @@ describe('lot subdivision invariants', () => {
       const inside = multiArea(intersectPoly([lot.polygon], [b.polygon]));
       expect(inside / area(lot.polygon), `lot ${lot.id} escapes its block`).toBeGreaterThan(0.97);
     }
-  });
+  }, 60000);
 });
 
 describe('determinism', () => {

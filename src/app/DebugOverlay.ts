@@ -3,6 +3,7 @@ import type { Polygon, Vec2 } from '../core/types.js';
 import * as V from '../geom/vec2.js';
 import type { UseZone } from '../core/params.js';
 import type { City } from '../city/City.js';
+import { contourSegments } from '../terrain/heightfield.js';
 import type { LotKind } from '../city/Lots.js';
 import { UNAVOIDABLE_VACANCY } from '../building/types.js';
 
@@ -25,7 +26,10 @@ export type OverlayLayer =
   | 'landUse'
   | 'useZones'
   | 'zoneFill'
-  | 'useFill';
+  | 'useFill'
+  | 'contours'
+  | 'water'
+  | 'growth';
 
 const COLORS: Record<OverlayLayer, number> = {
   roads: 0x4aa3ff,
@@ -44,6 +48,10 @@ const COLORS: Record<OverlayLayer, number> = {
   useZones: 0xffb03a,
   zoneFill: 0x9a6bff,
   useFill: 0x63e08a,
+  contours: 0x8a8f6a,
+  water: 0x4aa3ff,
+  // Legend colour only; drawn per vertex from the generation.
+  growth: 0xffd24a,
 };
 
 /**
@@ -91,7 +99,22 @@ const HEIGHTS: Record<OverlayLayer, number> = {
   // Below the line layers, so an outline drawn over a fill still reads.
   zoneFill: 0.12,
   useFill: 0.16,
+  contours: 0.08,
+  water: 0.2,
+  growth: 0.38,
 };
+
+/**
+ * Ground height under the overlay, set for the duration of a rebuild.
+ *
+ * Every layer here used to be drawn at a fixed y — 0.35 for roads, 0.6 for
+ * footprints — which was exactly right on a flat world and useless on 26 m of
+ * relief, where most of the town would be above its own outlines. The heights
+ * above are now *offsets*, and this is what they are offset from. A module-level
+ * hook rather than an argument threaded through six helpers: this is the debug
+ * overlay, and the helpers are called once each per regeneration.
+ */
+let groundAt: (x: number, y: number) => number = () => 0;
 
 export class DebugOverlay {
   readonly group = new THREE.Group();
@@ -117,16 +140,19 @@ export class DebugOverlay {
   /** Rebuild every layer from a freshly generated city. */
   rebuild(city: City, extra: { buildable?: Polygon[]; footprints?: Polygon[] } = {}): void {
     this.clear();
+    groundAt = (x, y) => city.terrain.heightAtXY(x, y);
 
     const roadSegs: number[] = [];
     for (const e of city.roads.edges) {
       const a = city.roads.graph.node(e.a).p;
       const b = city.roads.graph.node(e.b).p;
       const h = HEIGHTS.roads;
-      roadSegs.push(a.x, h, a.y, b.x, h, b.y);
+      roadSegs.push(a.x, groundAt(a.x, a.y) + h, a.y, b.x, groundAt(b.x, b.y) + h, b.y);
     }
     for (const lane of city.roads.privateLanes) {
-      roadSegs.push(lane.a.x, HEIGHTS.roads, lane.a.y, lane.b.x, HEIGHTS.roads, lane.b.y);
+      const la = groundAt(lane.a.x, lane.a.y) + HEIGHTS.roads;
+      const lb = groundAt(lane.b.x, lane.b.y) + HEIGHTS.roads;
+      roadSegs.push(lane.a.x, la, lane.a.y, lane.b.x, lb, lane.b.y);
     }
     this.addLayer('roads', roadSegs);
 
@@ -139,7 +165,9 @@ export class DebugOverlay {
       for (const f of lot.frontages) {
         const h = HEIGHTS.frontage;
         const tip = V.addScaled(f.mid, f.outward, 2.2);
-        frontSegs.push(f.mid.x, h, f.mid.y, tip.x, h, tip.y);
+        const hm = groundAt(f.mid.x, f.mid.y) + h;
+        const ht = groundAt(tip.x, tip.y) + h;
+        frontSegs.push(f.mid.x, hm, f.mid.y, tip.x, ht, tip.y);
         const wing = V.scale(f.dir, 0.6);
         const back = V.addScaled(tip, f.outward, -0.9);
         frontSegs.push(tip.x, h, tip.y, back.x + wing.x, h, back.y + wing.y);
@@ -209,6 +237,44 @@ export class DebugOverlay {
       city.lots.map((l) => ({ poly: l.polygon, color: KIND_COLORS[l.zonedKind] })),
       HEIGHTS.useFill,
     );
+
+    // --- terrain and growth -------------------------------------------------
+    // The three layers that make this generation's decisions visible. Contours
+    // are the most useful thing in the file while tuning the land: the roads
+    // are *supposed* to run along them, and whether they do is impossible to
+    // judge from a shaded hillside.
+    const field = city.terrain.field;
+    if (field) {
+      const contour: number[] = [];
+      for (const [a, b] of contourSegments(field, 2)) {
+        contour.push(
+          a.x, groundAt(a.x, a.y) + HEIGHTS.contours, a.y,
+          b.x, groundAt(b.x, b.y) + HEIGHTS.contours, b.y,
+        );
+      }
+      this.addLayer('contours', contour);
+    }
+
+    this.addLayer(
+      'water',
+      ringSegments([...city.terrain.waterPolygons, ...city.terrain.bankPolygons], HEIGHTS.water),
+    );
+
+    // Roads coloured by the step that built them: dark at the station, bright
+    // at the fringe. Debugging growth without this is guesswork.
+    const maxGen = Math.max(1, ...city.roads.edges.map((e) => e.gen));
+    const growthSegs: number[] = [];
+    const growthCols: number[] = [];
+    const gc = new THREE.Color();
+    for (const e of city.roads.edges) {
+      const a = city.roads.graph.node(e.a).p;
+      const b = city.roads.graph.node(e.b).p;
+      gc.setHSL(0.62 - 0.62 * Math.max(0, e.gen) / maxGen, 0.85, 0.55, THREE.SRGBColorSpace);
+      const h = HEIGHTS.growth;
+      growthSegs.push(a.x, groundAt(a.x, a.y) + h, a.y, b.x, groundAt(b.x, b.y) + h, b.y);
+      growthCols.push(gc.r, gc.g, gc.b, gc.r, gc.g, gc.b);
+    }
+    this.addLayer('growth', growthSegs, growthCols);
   }
 
   /**
@@ -234,7 +300,7 @@ export class DebugOverlay {
       for (const tri of THREE.ShapeUtils.triangulateShape(shape, [])) {
         for (const i of tri) {
           const p = poly[i]!;
-          positions.push(p.x, h, p.y);
+          positions.push(p.x, groundAt(p.x, p.y) + h, p.y);
           colors.push(c.r, c.g, c.b);
         }
       }
@@ -315,8 +381,8 @@ function crossedRings(polys: Polygon[], h: number): number[] {
       maxX = Math.max(maxX, p.x);
       maxY = Math.max(maxY, p.y);
     }
-    out.push(minX, h, minY, maxX, h, maxY);
-    out.push(minX, h, maxY, maxX, h, minY);
+    out.push(minX, groundAt(minX, minY) + h, minY, maxX, groundAt(maxX, maxY) + h, maxY);
+    out.push(minX, groundAt(minX, maxY) + h, maxY, maxX, groundAt(maxX, minY) + h, minY);
   }
   return out;
 }
@@ -334,7 +400,7 @@ function ringSegmentsColored(
     for (let i = 0, n = poly.length; i < n; i++) {
       const a: Vec2 = poly[i]!;
       const b: Vec2 = poly[(i + 1) % n]!;
-      positions.push(a.x, h, a.y, b.x, h, b.y);
+      positions.push(a.x, groundAt(a.x, a.y) + h, a.y, b.x, groundAt(b.x, b.y) + h, b.y);
       colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
     }
   }
@@ -347,7 +413,7 @@ function ringSegments(polys: Polygon[], h: number): number[] {
     for (let i = 0, n = poly.length; i < n; i++) {
       const a: Vec2 = poly[i]!;
       const b: Vec2 = poly[(i + 1) % n]!;
-      out.push(a.x, h, a.y, b.x, h, b.y);
+      out.push(a.x, groundAt(a.x, a.y) + h, a.y, b.x, groundAt(b.x, b.y) + h, b.y);
     }
   }
   return out;

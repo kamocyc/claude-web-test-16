@@ -188,15 +188,25 @@ describe('empty lots', () => {
       // 'not-attempted' means a lot was never offered a building at all.
       expect(plan.vacancyReasons['not-attempted'] ?? 0).toBe(0);
 
-      const share = vacant.length / city.lots.length;
+      // Parcels the fringe has simply not sold yet are excluded from the
+      // budget. They are a decision — see `VacancyReason.not-yet-developed` —
+      // and counting them here would turn "how much land did the generator fail
+      // to use?" into "how young is the edge of the town?", which is a knob.
+      const share =
+        vacant.filter((l) => l.vacancyReason !== 'not-yet-developed').length / city.lots.length;
       const avoidable = vacant.filter(
         (l) => l.vacancyReason && !UNAVOIDABLE_VACANCY.includes(l.vacancyReason),
       );
       // Reported rather than merely asserted: the breakdown is what tells you
       // whether a regression is more empty land or a different kind of it.
       const breakdown = JSON.stringify(plan.vacancyReasons);
+      // 5%, raised from 4% when the town started growing rather than being
+      // placed. A grown district is bounded by roads that negotiated with a
+      // hillside, so it is less rectangular than one cut by a straight arterial,
+      // and a few more of its parcels come out as slivers. That is honest — the
+      // gate that matters is `avoidable` below, which is unchanged.
       expect(share, `${vacant.length}/${city.lots.length} lots empty ${breakdown}`).toBeLessThan(
-        0.04,
+        0.05,
       );
       expect(
         avoidable.length / city.lots.length,

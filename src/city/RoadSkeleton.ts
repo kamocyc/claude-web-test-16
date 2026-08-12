@@ -2,6 +2,8 @@ import type { Vec2 } from '../core/types.js';
 import { DEG, type RoadClass, type RoadParams } from '../core/params.js';
 import { makeRng, subSeed, type Rng } from '../core/rng.js';
 import * as V from '../geom/vec2.js';
+import type { Terrain } from '../terrain/Terrain.js';
+import type { ObstacleField } from '../terrain/Obstacles.js';
 
 /**
  * Tier-1: the roads that decide the shape of the town.
@@ -22,6 +24,12 @@ import * as V from '../geom/vec2.js';
 export interface SkeletonLine {
   pts: Vec2[];
   cls: RoadClass;
+  /**
+   * Which growth step laid this road. Always 0 from the one-shot generator
+   * below — a planned 区画整理 town has no history, which is exactly what makes
+   * it a planned town.
+   */
+  gen: number;
 }
 
 export interface Skeleton {
@@ -166,7 +174,14 @@ function acceptable(line: Vec2[], placed: SkeletonLine[], p: RoadParams): boolea
 /** How far a Tier-1 road runs past the perimeter so their crossing is real. */
 export const PERIMETER_OVERSHOOT = 4;
 
-export function generateSkeleton(seed: string, p: RoadParams): Skeleton {
+export function generateSkeleton(
+  seed: string,
+  p: RoadParams,
+  terrain: Terrain,
+  obstacles: ObstacleField,
+): Skeleton {
+  void terrain;
+  void obstacles;
   const rng = makeRng(subSeed(seed, 'roads', 'skeleton'));
   const E = p.extent;
   const reach = E * 1.6;
@@ -184,7 +199,7 @@ export function generateSkeleton(seed: string, p: RoadParams): Skeleton {
       { x: -E, y: E },
     ];
     for (let i = 0; i < 4; i++) {
-      lines.push({ pts: [c[i]!, c[(i + 1) % 4]!], cls: p.perimeterClass });
+      lines.push({ pts: [c[i]!, c[(i + 1) % 4]!], cls: p.perimeterClass, gen: 0 });
     }
   }
 
@@ -193,7 +208,7 @@ export function generateSkeleton(seed: string, p: RoadParams): Skeleton {
     for (let k = 0; k < tries; k++) {
       const candidate = make(rng);
       if (!acceptable(candidate, lines, p)) continue;
-      lines.push({ pts: candidate, cls });
+      lines.push({ pts: candidate, cls, gen: 0 });
       return candidate;
     }
     return null;
@@ -256,7 +271,7 @@ export function generateSkeleton(seed: string, p: RoadParams): Skeleton {
   for (const line of lines) {
     const isPerimeter = line.pts.length === 2 && line.pts.every((q) => Math.abs(Math.abs(q.x) - E) < 1e-6 || Math.abs(Math.abs(q.y) - E) < 1e-6);
     for (const run of clipToSquare(line.pts, isPerimeter ? E : E + PERIMETER_OVERSHOOT)) {
-      if (run.length > 1) clipped.push({ pts: run, cls: line.cls });
+      if (run.length > 1) clipped.push({ pts: run, cls: line.cls, gen: line.gen });
     }
   }
 

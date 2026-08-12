@@ -154,10 +154,25 @@ export type VacancyReason =
   /** Long and thin: a building here would be a corridor, not a house. */
   | 'too-narrow'
   /** The lot was not offered a building at all — a bug if it ever appears. */
-  | 'not-attempted';
+  | 'not-attempted'
+  /**
+   * The estate is laid out but this parcel has not been sold yet.
+   *
+   * The fringe of a growing suburb is full of these — a 分譲地 with its roads
+   * and its 擁壁 already built, half its plots still 資材置場 or waiting for a
+   * buyer. It is the most legible sign that the middle of the town is older
+   * than the edge, and it is a *decision*, not a failure, which is why it goes
+   * in `UNAVOIDABLE_VACANCY`: colouring it red on the debug overlay would mean
+   * the generator had failed at the entire fringe.
+   */
+  | 'not-yet-developed';
 
 /** Reasons that represent land genuinely not worth building on. */
-export const UNAVOIDABLE_VACANCY: readonly VacancyReason[] = ['too-narrow', 'buildable-too-small'];
+export const UNAVOIDABLE_VACANCY: readonly VacancyReason[] = [
+  'too-narrow',
+  'buildable-too-small',
+  'not-yet-developed',
+];
 
 export interface BuildEnvelope {
   buildable: Polygon | null;

@@ -32,6 +32,7 @@ export interface DistrictBoundary {
   inward: Vec2;
   cls: RoadClass;
   width: number;
+  gen: number;
 }
 
 export interface District {
@@ -43,11 +44,91 @@ export interface District {
   boundary: DistrictBoundary[];
   area: number;
   /**
+   * The growth step that closed this face — how old the district is.
+   *
+   * Read as the *maximum* over the boundary: a face does not exist until its
+   * last side has been built, and the last side is the newest one. It decides
+   * how finely the district grids itself, which is the largest single lever on
+   * the town's density gradient.
+   */
+  generation: number;
+  /**
+   * Has the town reached here yet?
+   *
+   * False for a face the frontier has not arrived at by `growth.steps`. Those
+   * are still fields: no street grid is laid inside them and no block is cut out
+   * of them, which is what actually makes the age control visible. Without it a
+   * town stopped early still developed its whole square, because the perimeter
+   * ring encloses the countryside too and a face is a face.
+   */
+  developed: boolean;
+  /**
    * 用途地域. Set to `lowRise` at construction and overwritten by
    * `city/LandUse.ts` before the Tier-2 grids are laid — the industrial zone
    * coarsens its own street grid, so the zone has to exist before the streets do.
    */
   zone: UseZone;
+}
+
+/**
+ * How old a face is: the newest road that closed it.
+ *
+ * The maximum, because a face does not exist until its last side is built. The
+ * perimeter ring is excluded — it carries `UNGROWN` and was never a growth
+ * event, so counting it dated every edge-of-town district as the newest in the
+ * place and gave it the coarsest grid regardless of what had happened inside.
+ */
+function faceGeneration(boundary: DistrictBoundary[]): number {
+  let best = 0;
+  let sawGrown = false;
+  for (const e of boundary) {
+    if (e.gen < 0) continue;
+    sawGrown = true;
+    if (e.gen > best) best = e.gen;
+  }
+  return sawGrown ? best : 0;
+}
+
+/**
+ * The growth step at which the frontier would have reached a point.
+ *
+ * The inverse of `RoadGrowth.frontierReach`,
+ * in Chebyshev radius because the town is a square. Zero when growth is off — a
+ * town laid out all at once has no frontier and every district is generation 0.
+ */
+function arrivalGeneration(c: Vec2, p: RoadParams): number {
+  const g = p.growth;
+  if (!g.enabled) return 0;
+  const r = Math.max(Math.abs(c.x), Math.abs(c.y)) / Math.max(1, p.extent);
+  const arrived = Math.pow(Math.min(1, r), 1 / g.spreadExponent);
+  return Math.round(arrived * (g.fullAt - 1));
+}
+
+/**
+ * How old a district is.
+ *
+ * The frontier radius sets the floor and most of the answer; the roads that
+ * closed the face adjust it, by a bounded amount, upward.
+ *
+ * Neither term works alone, and both failures are quiet. The boundary alone: an
+ * early arterial can run all the way to the town edge, so a fringe face bounded
+ * by it and by the perimeter dates itself to generation 2, takes the finest grid
+ * and sells every plot — while the middle of town, criss-crossed by later roads
+ * and later infill, dates late. The measured density gradient came out flat and
+ * the unsold plots sat nearer the station than the built ones. The radius alone:
+ * every district at the same distance is the same age, which throws away the
+ * one thing growth was for.
+ *
+ * So the radius says when growth could first have been here at all, and the
+ * boundary is allowed to say "and it was not developed for another few years" —
+ * up to `LATE_ALLOWANCE` of them.
+ */
+const LATE_ALLOWANCE = 6;
+
+function districtGeneration(boundary: DistrictBoundary[], c: Vec2, p: RoadParams): number {
+  const arrival = arrivalGeneration(c, p);
+  const face = faceGeneration(boundary);
+  return Math.max(arrival, Math.min(face, arrival + LATE_ALLOWANCE));
 }
 
 /** Relative say a road has in setting the axis of the district beside it. */
@@ -101,6 +182,7 @@ function attributeBoundary(
     const mid = V.lerp(e.a, e.b, 0.5);
     let cls: RoadClass = 'local';
     let width = p.localWidth;
+    let gen = 0;
     let bestScore = Infinity;
 
     for (const ge of graph.edges) {
@@ -116,6 +198,7 @@ function attributeBoundary(
       const data = ge.data as RoadEdgeData | undefined;
       cls = data?.cls ?? 'local';
       width = data?.width ?? roadWidth(cls, p);
+      gen = data?.gen ?? 0;
     }
 
     out.push({
@@ -125,6 +208,7 @@ function attributeBoundary(
       inward: e.normal,
       cls,
       width,
+      gen,
     });
   }
   return out;
@@ -143,7 +227,7 @@ export function partitionDistricts(
 ): { graph: PlanarGraph; districts: District[] } {
   const raw = new PlanarGraph(p.nodeSnap);
   for (const line of skeleton.lines) {
-    const data = { cls: line.cls, width: roadWidth(line.cls, p) } satisfies RoadEdgeData;
+    const data = { cls: line.cls, width: roadWidth(line.cls, p), gen: line.gen } satisfies RoadEdgeData;
     for (let i = 0; i + 1 < line.pts.length; i++) {
       raw.addSegment(line.pts[i]!, line.pts[i + 1]!, data);
     }
@@ -162,6 +246,7 @@ export function partitionDistricts(
       if (a < 1) continue;
 
       const boundary = attributeBoundary(poly, graph, p, Math.max(1.0, p.nodeSnap * 0.5));
+      const gen = districtGeneration(boundary, centroid(poly), p);
       const id = districts.length;
       const rng = makeRng(subSeed(seed, 'roads', 'district', id));
       districts.push({
@@ -174,6 +259,8 @@ export function partitionDistricts(
         axis: dominantAxis(boundary) + rng.jitter(p.districtAxisJitter * DEG),
         boundary,
         area: a,
+        generation: gen,
+        developed: !p.growth.enabled || gen < p.growth.steps,
         zone: 'lowRise',
       });
     }

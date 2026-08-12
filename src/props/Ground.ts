@@ -7,14 +7,23 @@ import type { MaterialLibrary } from '../material/materials.js';
 import type { City } from '../city/City.js';
 import type { BuiltBuilding } from '../building/Builder.js';
 import { KIND_RULES } from '../building/kinds.js';
+import { buildTerrainMesh } from '../terrain/GroundMesh.js';
+import { gradeGround } from '../terrain/Graded.js';
+import type { Terrain } from '../terrain/Terrain.js';
 
 /**
- * Ground plane, road surfaces, kerbs and the hardstanding on paved lots.
+ * Ground, road surfaces, kerbs, cut-and-fill faces and the hardstanding on
+ * paved lots.
  *
- * Roads are ribbons of quads at y = 0.02 with a light concrete gutter strip
- * along each edge — the 側溝 that runs beside every Japanese local street. No
- * markings: this build deliberately leaves out road paint, guardrails and
- * street furniture.
+ * Roads are ribbons of quads with a light concrete gutter strip along each edge
+ * — the 側溝 that runs beside every Japanese local street. No markings: this
+ * build deliberately leaves out road paint, guardrails and street furniture.
+ *
+ * The ribbons sit at their *design* height, not on the ground. A road is a
+ * graded surface — see `city/RoadProfile.ts` — so where the design height and
+ * the land disagree the difference is made up here, with an embankment where it
+ * is small and a retaining wall where it is not. That difference is most of what
+ * makes a hillside town read as built rather than as draped.
  */
 export function buildGround(
   city: City,
@@ -25,35 +34,45 @@ export function buildGround(
   const group = new THREE.Group();
   group.name = 'ground';
 
-  const extent = params.roads.extent + 300;
+  const terrain = city.terrain;
+  const heights = city.roadHeights;
 
-  // Base plane.
-  const groundGeom = new THREE.PlaneGeometry(extent * 2, extent * 2, 1, 1);
-  groundGeom.rotateX(-Math.PI / 2);
-  const groundMat = materials.materials.ground as THREE.MeshStandardMaterial;
-  if (groundMat.map) {
-    groundMat.map.repeat.set((extent * 2) / 40, (extent * 2) / 40);
-    groundMat.map.needsUpdate = true;
+  if (terrain.field) {
+    // The ground is drawn *after* the earthworks, not before them — see
+    // `terrain/Graded.ts`. Without this the town is buried in its own spoil.
+    group.add(buildTerrainMesh(terrain, materials, gradeGround(city) ?? undefined));
+  } else {
+    // Flat world: the original single plane, kept because turning terrain off
+    // has to give back exactly the town this generator used to make.
+    const extent = params.roads.extent + 300;
+    const groundGeom = new THREE.PlaneGeometry(extent * 2, extent * 2, 1, 1);
+    groundGeom.rotateX(-Math.PI / 2);
+    const groundMat = materials.materials.ground as THREE.MeshStandardMaterial;
+    if (groundMat.map) {
+      groundMat.map.repeat.set((extent * 2) / 40, (extent * 2) / 40);
+      groundMat.map.needsUpdate = true;
+    }
+    const ground = new THREE.Mesh(groundGeom, groundMat);
+    ground.receiveShadow = true;
+    ground.position.y = -0.02;
+    // The ground carries no vertex colours, so give it a uniform set.
+    const count = groundGeom.attributes.position!.count;
+    const colors = new Float32Array(count * 3);
+    // A muted olive-grey, distinctly not asphalt — otherwise the ground and the
+    // roads read as one continuous car park.
+    for (let i = 0; i < count; i++) {
+      colors[i * 3] = 0.46;
+      colors[i * 3 + 1] = 0.48;
+      colors[i * 3 + 2] = 0.38;
+    }
+    groundGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    group.add(ground);
   }
-  const ground = new THREE.Mesh(groundGeom, groundMat);
-  ground.receiveShadow = true;
-  ground.position.y = -0.02;
-  // The ground carries no vertex colours, so give it a uniform set.
-  const count = groundGeom.attributes.position!.count;
-  const colors = new Float32Array(count * 3);
-  // A muted olive-grey, distinctly not asphalt — otherwise the ground and the
-  // roads read as one continuous car park.
-  for (let i = 0; i < count; i++) {
-    colors[i * 3] = 0.46;
-    colors[i * 3 + 1] = 0.48;
-    colors[i * 3 + 2] = 0.38;
-  }
-  groundGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  group.add(ground);
 
   // Road surfaces.
   const asphalt = new GeometryBuffer();
   const kerb = new GeometryBuffer();
+  const earthworks = new GeometryBuffer();
 
   /**
    * `extend` closes the gap at a junction by running the ribbon a little past
@@ -61,8 +80,20 @@ export function buildGround(
    * dead end, and at both ends of a private lane, the node *is* the extent of
    * the land taken from the lots, and running past it puts asphalt over ground
    * a house is standing on.
+   *
+   * `ya`/`yb` are the design heights at the two nodes. Because every road
+   * meeting at a junction was given the *same* height for that node, the
+   * overshoots from all the arms land on one plane and the corner closes
+   * exactly — which is the whole reason the profile is solved per node.
    */
-  const addRibbon = (a: Vec2, b: Vec2, width: number, extend: { start: boolean; end: boolean }) => {
+  const addRibbon = (
+    a: Vec2,
+    b: Vec2,
+    width: number,
+    ya: number,
+    yb: number,
+    extend: { start: boolean; end: boolean },
+  ) => {
     const d = V.sub(b, a);
     const l = V.len(d);
     if (l < 0.2) return;
@@ -73,14 +104,22 @@ export function buildGround(
     const a2 = V.addScaled(a, dir, extend.start ? -over : 0);
     const b2 = V.addScaled(b, dir, extend.end ? over : 0);
 
-    const quad = (inner: number, outer: number, y: number, buf: GeometryBuffer): void => {
+    // The carriageway is level across and linear along, so its surface is a
+    // plane: `pushLiftedCap` is documented as exact for exactly this case.
+    const slope = (yb - ya) / l;
+    const surfaceY = (p: Vec2, lift: number): number =>
+      ya + V.dot(V.sub(p, a), dir) * slope + lift;
+    const nl = Math.hypot(slope, 1);
+    const normal = { x: (-slope * dir.x) / nl, y: 1 / nl, z: (-slope * dir.y) / nl };
+
+    const quad = (inner: number, outer: number, lift: number, buf: GeometryBuffer): void => {
       const p: Polygon = [
         V.addScaled(a2, n, inner),
         V.addScaled(b2, n, inner),
         V.addScaled(b2, n, outer),
         V.addScaled(a2, n, outer),
       ];
-      buf.pushCap(p, y, true);
+      buf.pushLiftedCap(p, (q) => surfaceY(q, lift), normal, true);
     };
 
     // 側溝: a pale concrete gutter strip along each edge. It sits *inside* the
@@ -94,6 +133,19 @@ export function buildGround(
     kerb.setColor({ r: 0.72, g: 0.71, b: 0.68 });
     quad(half - gutter, half, 0.035, kerb);
     quad(-half, -half + gutter, 0.035, kerb);
+
+    if (!terrain.field) return;
+
+    // A road that crosses the water gets a deck rather than an embankment. It
+    // is forty lines and it is the whole difference between "a bridge" and "the
+    // road is floating"; an embankment drawn down to the riverbed would dam the
+    // river instead.
+    const crossing = city.obstacles.waterCrossing(a2, b2);
+    if (crossing) {
+      addBridge(earthworks, a2, b2, dir, n, half, surfaceY, crossing);
+      return;
+    }
+    addEarthworks(earthworks, terrain, a2, b2, dir, n, half, surfaceY, params.platform.roadWallMin);
   };
 
   // How many roads meet at each node, so a ribbon knows whether there is
@@ -111,13 +163,18 @@ export function buildGround(
     // there is no second ribbon and nothing to fill — the asphalt simply ran
     // 0.45 of a carriageway past the last node, onto the lot behind it. The
     // land there belongs to a house.
-    addRibbon(a, b, e.width, {
+    addRibbon(a, b, e.width, heights.at(e.a), heights.at(e.b), {
       start: (degree.get(e.a) ?? 0) > 1,
       end: (degree.get(e.b) ?? 0) > 1,
     });
   }
   for (const lane of city.roads.privateLanes) {
-    addRibbon(lane.a, lane.b, lane.width, { start: false, end: false });
+    // A 私道 has no node in the road graph and therefore no solved profile. It
+    // takes its ends from whatever the network nearby is doing, which is what
+    // actually happens: the lane was graded to meet the street it opens off.
+    const ya = heights.nearestRoadHeight(lane.a, 40) ?? terrain.heightAt(lane.a);
+    const yb = heights.nearestRoadHeight(lane.b, 40) ?? terrain.heightAt(lane.b);
+    addRibbon(lane.a, lane.b, lane.width, ya, yb, { start: false, end: false });
   }
 
   buildLotSurfaces(buildings, asphalt, kerb);
@@ -125,6 +182,7 @@ export function buildGround(
   for (const [buf, family] of [
     [asphalt, 'asphalt'],
     [kerb, 'concrete'],
+    [earthworks, 'concrete'],
   ] as const) {
     if (buf.isEmpty) continue;
     const mesh = new THREE.Mesh(buf.toGeometry(), materials.materials[family]);
@@ -135,6 +193,127 @@ export function buildGround(
   }
 
   return group;
+}
+
+/**
+ * A single-span 桁橋 where a road crosses the river.
+ *
+ * No piers: a suburban crossing of a river this size is one span, and a pier in
+ * the channel would be more geometry saying something less true. What it does
+ * need is the three things that make a bridge legible from a distance — a deck
+ * with visible thickness, a parapet along each side, and an abutment at each
+ * bank so the deck plainly lands on something.
+ */
+function addBridge(
+  buf: GeometryBuffer,
+  a: Vec2,
+  b: Vec2,
+  dir: Vec2,
+  n: Vec2,
+  half: number,
+  surfaceY: (p: Vec2, lift: number) => number,
+  crossing: { t0: number; t1: number },
+): void {
+  // The deck runs a little past the wet part at each end, onto dry ground.
+  const pad = 0.06;
+  const from = V.lerp(a, b, Math.max(0, crossing.t0 - pad));
+  const to = V.lerp(a, b, Math.min(1, crossing.t1 + pad));
+  if (V.dist(from, to) < 1) return;
+
+  const deck = (inner: number, outer: number, y0: (p: Vec2) => number, y1: (p: Vec2) => number) => {
+    const c0 = V.addScaled(from, n, inner);
+    const c1 = V.addScaled(to, n, inner);
+    const c2 = V.addScaled(to, n, outer);
+    const c3 = V.addScaled(from, n, outer);
+    // A prism between two sloping planes is not expressible here, so the slab
+    // is drawn at its two ends' heights — over a 30 m span the error is under a
+    // centimetre and it is under the deck.
+    buf.pushPrism([c0, c1, c2, c3], Math.min(y0(c0), y0(c1)), Math.max(y1(c0), y1(c1)), true, true);
+  };
+
+  // Soffit slab.
+  buf.setColor({ r: 0.6, g: 0.6, b: 0.58 });
+  deck(
+    -half,
+    half,
+    (p) => surfaceY(p, -0.75),
+    (p) => surfaceY(p, -0.02),
+  );
+
+  // 高欄 along each side.
+  buf.setColor({ r: 0.72, g: 0.72, b: 0.7 });
+  for (const side of [1, -1] as const) {
+    deck(
+      (half - 0.18) * side,
+      half * side,
+      (p) => surfaceY(p, 0.0),
+      (p) => surfaceY(p, 0.95),
+    );
+  }
+  void dir;
+}
+
+/**
+ * The cut and the fill along one carriageway edge.
+ *
+ * Where the road's design height and the ground disagree, something has to make
+ * up the difference or there is a slot of daylight between the asphalt and the
+ * hillside. Below `wallMin` it is an earth batter in the ground colour; above,
+ * a concrete face. The threshold is not cosmetic — a 3 m batter at 1:1.5 would
+ * be 4.5 m of ground, which is a whole lot's worth, and the reason real hillside
+ * streets are walled rather than sloped.
+ */
+function addEarthworks(
+  buf: GeometryBuffer,
+  terrain: Terrain,
+  a: Vec2,
+  b: Vec2,
+  dir: Vec2,
+  n: Vec2,
+  half: number,
+  surfaceY: (p: Vec2, lift: number) => number,
+  wallMin: number,
+): void {
+  void dir;
+  const len = V.dist(a, b);
+  const steps = Math.max(1, Math.round(len / 4));
+
+  for (const side of [1, -1] as const) {
+    for (let i = 0; i < steps; i++) {
+      const p0 = V.addScaled(V.lerp(a, b, i / steps), n, half * side);
+      const p1 = V.addScaled(V.lerp(a, b, (i + 1) / steps), n, half * side);
+      const y0 = surfaceY(p0, 0.035);
+      const y1 = surfaceY(p1, 0.035);
+      const g0 = terrain.heightAt(p0);
+      const g1 = terrain.heightAt(p1);
+      const d0 = y0 - g0;
+      const d1 = y1 - g1;
+      if (Math.abs(d0) < 0.08 && Math.abs(d1) < 0.08) continue;
+
+      const wall = Math.max(Math.abs(d0), Math.abs(d1)) >= wallMin;
+      buf.setColor(wall ? { r: 0.66, g: 0.65, b: 0.62 } : { r: 0.44, g: 0.43, b: 0.36 });
+
+      // A batter leans away from the road; a wall drops straight down. Either
+      // way the quad runs from the kerb line to where it meets the ground.
+      const lean = wall ? 0.04 : Math.min(2.5, Math.abs(d0) * 1.5);
+      const q0 = V.addScaled(p0, n, lean * side);
+      const q1 = V.addScaled(p1, n, lean * side);
+
+      // Winding depends on which side and whether we are above or below the
+      // ground, so the face is emitted both ways — this is a thin sliver seen
+      // from one side in practice, and a wrongly-wound one is invisible.
+      buf.pushWorldTriangle(
+        { x: p0.x, y: y0, z: p0.y },
+        { x: p1.x, y: y1, z: p1.y },
+        { x: q1.x, y: g1, z: q1.y },
+      );
+      buf.pushWorldTriangle(
+        { x: p0.x, y: y0, z: p0.y },
+        { x: q1.x, y: g1, z: q1.y },
+        { x: q0.x, y: g0, z: q0.y },
+      );
+    }
+  }
 }
 
 /**
@@ -156,7 +335,7 @@ function buildLotSurfaces(
     if (!KIND_RULES[b.spec.kind].pavedLot) continue;
 
     asphalt.setColor({ r: 0.185, g: 0.187, b: 0.196 });
-    asphalt.pushCap(b.lot.polygon, 0.025, true);
+    asphalt.pushCap(b.lot.polygon, b.lot.platform.padY + 0.025, true);
 
     // Bays along the frontage, only for the shop — a factory yard is not marked
     // out in spaces, it is turning room for a lorry.
@@ -189,7 +368,7 @@ function buildLotSurfaces(
           { x: q.x + side.x, y: q.y + side.y },
           { x: q.x - side.x, y: q.y - side.y },
         ],
-        0.032,
+        b.lot.platform.padY + 0.032,
         true,
       );
     }

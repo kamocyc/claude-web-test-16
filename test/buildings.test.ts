@@ -108,10 +108,22 @@ describe('building geometry', () => {
     }
   });
 
-  it('produces at most three stacks with at most three distinct heights', () => {
+  /**
+   * What is bounded is the number of *step-back levels*, not the number of
+   * pieces they come in.
+   *
+   * A 斜線 step-back removes a band from a storey, and on a concave plan that
+   * band is not one ring — it can come off as two or three separate pieces, each
+   * of which is its own stack at the same height. This used to assert three
+   * stacks flat, which held only because every lot was a tidy quadrilateral; a
+   * parcel cut back by a river bank breaks a band into pieces and trips it
+   * without anything being wrong. The real invariant is that a suburban building
+   * steps back a small number of times, and that is the second line here.
+   */
+  it('steps back at most three times, in a handful of pieces', () => {
     for (const b of built) {
-      expect(b.mass.stacks.length, `lot ${b.lot.id}`).toBeLessThanOrEqual(3);
-      expect(new Set(b.mass.stacks.map((s) => s.floors)).size).toBeLessThanOrEqual(3);
+      expect(new Set(b.mass.stacks.map((s) => s.floors)).size, `lot ${b.lot.id}`).toBeLessThanOrEqual(3);
+      expect(b.mass.stacks.length, `lot ${b.lot.id}`).toBeLessThanOrEqual(6);
     }
   });
 

@@ -12,10 +12,12 @@ import { buildGround } from '../props/Ground.js';
 import { buildSiteProps } from '../props/SiteProps.js';
 import { buildCommercialProps } from '../props/CommercialProps.js';
 import { buildIndustrialProps } from '../props/IndustrialProps.js';
+import { buildRetaining } from '../props/Retaining.js';
 import { KIND_RULES } from '../building/kinds.js';
 import { PropRegistry } from '../props/PropRegistry.js';
 import type { MaterialLibrary } from '../material/materials.js';
 import { ChunkedMeshBuilder } from './MeshMerger.js';
+import { generationAge } from '../city/RoadGrowth.js';
 
 export interface CityMeshResult {
   group: THREE.Group;
@@ -69,12 +71,31 @@ export function planBuildings(city: City, params: CityParams): BuildingPlan {
     vacancyReasons[reason] = (vacancyReasons[reason] ?? 0) + 1;
   };
 
+  const growth = params.roads.growth;
+
   for (const lot of city.lots) {
     // `kind` is mutated in place below, so a second pass over the same city
     // would see last time's 'vacant' and refuse a spec — leaving the lot empty
     // for good, whatever the parameters now say. Clear it before asking.
     if (lot.kind === 'vacant') lot.kind = lot.zonedKind;
     lot.vacancyReason = null;
+
+    // Has anyone bought this plot yet?
+    //
+    // The newest districts are laid out but not sold out, and this is the
+    // clearest single expression of the thing growth exists to produce: a town
+    // that is solid in the middle and thins toward the edge. Nothing else does
+    // it as directly — lot *sizes* also grow outward, so counting parcels per
+    // hectare actually reads the wrong way round without this.
+    if (growth.enabled && growth.fringeVacancy > 0) {
+      const age = generationAge(lot.generation, growth);
+      // Its own sub-seed namespace, so changing the fringe rule cannot reshuffle
+      // which roof colour every house in the town got.
+      if (makeRng(subSeed(lot.seed, 'developed')).chance(growth.fringeVacancy * age)) {
+        note(lot, 'not-yet-developed');
+        continue;
+      }
+    }
 
     const spec = makeBuildingSpec(lot, styleOf(lot.clusterId), params.buildings);
     if (!spec) {
@@ -112,19 +133,30 @@ export function buildCityMesh(
 
   for (const built of buildings) {
     const lot = built.lot;
-    chunks.add(lot.centroid, built.buffers);
+    // The building was authored flat and is lifted onto its platform here. See
+    // `ChunkedMeshBuilder.add` and `city/Platform.ts` for why that is the whole
+    // of what a hillside costs the building code.
+    const padY = lot.platform.padY;
+    chunks.add(lot.centroid, built.buffers, padY);
     if (built.envelope.buildable) buildableDebug.push(built.envelope.buildable);
     footprintDebug.push(built.footprint.outline);
-    buildSiteProps(props, lot, built.spec, built, params, makeRng(subSeed(lot.seed, 'props')));
-    // A separate sub-seed namespace, so adding street furniture to the shops
-    // cannot move the random stream that decides where a house's shrubs go.
-    const group = KIND_RULES[built.spec.kind].group;
-    if (group === 'commercial') {
-      buildCommercialProps(props, lot, built.spec, built, params, makeRng(subSeed(lot.seed, 'shopProps')));
-    } else if (group === 'industrial') {
-      buildIndustrialProps(props, lot, built.spec, built, params, makeRng(subSeed(lot.seed, 'yardProps')));
-    }
+    props.withBase(padY, () => {
+      buildSiteProps(props, lot, built.spec, built, params, makeRng(subSeed(lot.seed, 'props')));
+      // A separate sub-seed namespace, so adding street furniture to the shops
+      // cannot move the random stream that decides where a house's shrubs go.
+      const kindGroup = KIND_RULES[built.spec.kind].group;
+      if (kindGroup === 'commercial') {
+        buildCommercialProps(props, lot, built.spec, built, params, makeRng(subSeed(lot.seed, 'shopProps')));
+      } else if (kindGroup === 'industrial') {
+        buildIndustrialProps(props, lot, built.spec, built, params, makeRng(subSeed(lot.seed, 'yardProps')));
+      }
+    });
   }
+
+  // 擁壁, batters and the steps up from the street. Emitted for every lot, not
+  // just the built ones: an empty parcel on a slope was still cut and still
+  // needs holding up, and leaving those out puts a notch in every terrace.
+  buildRetaining(chunks, city, params.platform);
 
   group.add(chunks.build(materials));
   group.add(buildGround(city, params, materials, buildings));

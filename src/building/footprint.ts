@@ -551,7 +551,42 @@ function finishOutline(
     const settled = trimmedOpen ? cleanFootprint(trimmedOpen, params) : null;
     if (settled && usable(settled)) out = settled;
   }
+
+  // Last word: if a needle is still there, do not build.
+  //
+  // `trimSharpCorners` cuts one corner per pass and gives up on any whose
+  // surgery would cross the ring, so a plan can come out the far end still
+  // ending in a point — rare, and it took a parcel cut against a river bank to
+  // produce one. Shipping it anyway draws a razor blade stuck to the side of a
+  // house. Refusing is the answer this file already gives to a plan it cannot
+  // make into a building: the parcel stays empty and says why.
+  if (sharpestConvexCorner(out) < NEEDLE_FLOOR) return null;
   return out;
+}
+
+/** Below this a convex corner is a needle rather than a corner. */
+const NEEDLE_FLOOR = 25 * (Math.PI / 180);
+
+/**
+ * The sharpest *convex* corner of a CCW ring, in radians.
+ *
+ * Convex only: a reflex vertex measures its angle from the outside and is an
+ * inside corner, which no amount of sharpness turns into a needle.
+ */
+function sharpestConvexCorner(poly: Polygon): number {
+  let worst = Math.PI;
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const prev = poly[(i - 1 + n) % n]!;
+    const v = poly[i]!;
+    const next = poly[(i + 1) % n]!;
+    if (V.cross(V.sub(v, prev), V.sub(next, v)) <= 0) continue;
+    const a = V.sub(prev, v);
+    const b = V.sub(next, v);
+    if (V.len(a) < 1e-6 || V.len(b) < 1e-6) continue;
+    worst = Math.min(worst, V.angleBetween(a, b));
+  }
+  return worst;
 }
 
 /** Filled in when the fit fails, so the caller can say why the lot is empty. */

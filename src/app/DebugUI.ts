@@ -22,6 +22,9 @@ export interface DebugUIOptions {
 }
 
 const OVERLAY_LAYERS: [OverlayLayer, string][] = [
+  ['contours', '等高線 (2m)'],
+  ['water', '河川区域'],
+  ['growth', '道路の世代'],
   ['roads', '道路グラフ'],
   ['blocks', '街区'],
   ['lots', '敷地'],
@@ -59,6 +62,12 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
     params.seed = v;
     regenerate();
   });
+  // The one control this whole feature exists to expose, deliberately not
+  // buried in a folder: it is what "the town grew" means from the outside.
+  gui
+    .add(params.roads.growth, 'steps', 2, 40, 1)
+    .name('街の年齢（成長ステップ）')
+    .onFinishChange(regenerate);
   gui.add(actions, 'regenerate').name('再生成');
   gui.add(actions, 'randomSeed').name('ランダムシード');
   gui.add(actions, 'walkMode').name('歩行モード (W)');
@@ -73,6 +82,41 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   }
 
   // --- Roads ---------------------------------------------------------------
+  // --- 地形 -----------------------------------------------------------------
+  const fTerrain = gui.addFolder('地形').close();
+  fTerrain.add(params.terrain, 'enabled').name('地形を使う');
+  fTerrain.add(params.terrain, 'relief', 0, 60, 1).name('起伏の大きさ(m)');
+  fTerrain.add(params.terrain, 'hillScale', 120, 600, 10).name('丘の大きさ(m)');
+  fTerrain.add(params.terrain, 'tiltGrade', 0, 0.05, 0.002).name('全体の傾き');
+  fTerrain.add(params.terrain, 'maxBuildSlope', 0.2, 1.5, 0.05).name('建てられる最大傾斜');
+  fTerrain.add(params.terrain.river, 'enabled').name('川をつくる');
+  fTerrain.add(params.terrain.river, 'width', 6, 60, 2).name('川幅(m)');
+  fTerrain.add(params.terrain.river, 'valleyWidth', 40, 300, 10).name('谷の広がり(m)');
+  fTerrain.add(params.terrain.river, 'bankMargin', 0, 40, 1).name('河川区域の余白(m)');
+  fTerrain.add(params.terrain.terrace, 'count', 0, 4, 1).name('段丘崖の数');
+  fTerrain.add(params.terrain.terrace, 'step', 1, 10, 0.5).name('段丘崖の高さ(m)');
+
+  // --- 都市の成長 -----------------------------------------------------------
+  const fGrowth = gui.addFolder('都市の成長').close();
+  fGrowth.add(params.roads.growth, 'enabled').name('成長させる（切ると一発生成）');
+  fGrowth.add(params.roads.growth, 'coreSpacing', 24, 60, 1).name('中心部の街路間隔(m)');
+  fGrowth.add(params.roads.growth, 'fringeSpacing', 35, 110, 1).name('外縁部の街路間隔(m)');
+  fGrowth.add(params.roads.growth, 'fringeVacancy', 0, 0.6, 0.02).name('外縁の未分譲率');
+  fGrowth.add(params.roads.growth, 'fullAt', 6, 48, 1).name('市街化が完了する年齢');
+  fGrowth.add(params.roads.growth, 'spreadExponent', 0.3, 1.4, 0.02).name('広がりの速さ');
+  fGrowth.add(params.roads.growth, 'streetsPerStep', 2, 20, 1).name('1段階あたりの道路数');
+  fGrowth.add(params.roads.growth, 'cutFillWeight', 0, 3, 0.1).name('切土盛土を嫌う度合い');
+  fGrowth.add(params.roads.growth, 'slopeWeight', 0, 3, 0.1).name('勾配を嫌う度合い');
+
+  // --- 造成・擁壁 -----------------------------------------------------------
+  const fPad = gui.addFolder('造成・擁壁').close();
+  fPad.add(params.platform, 'enabled').name('造成する');
+  fPad.add(params.platform, 'plinth', 0, 1.2, 0.05).name('道路からの立ち上がり(m)');
+  fPad.add(params.platform, 'riserQuantum', 0.05, 0.5, 0.01).name('段差の刻み(m)');
+  fPad.add(params.platform, 'maxRiseAboveStreet', 0, 6, 0.25).name('道路より高くできる量(m)');
+  fPad.add(params.platform, 'maxCutBelowStreet', 0, 6, 0.25).name('道路より低くできる量(m)');
+  fPad.add(params.platform, 'wallMin', 0.2, 2, 0.1).name('擁壁にする段差(m)');
+
   const fRoads = gui.addFolder('道路').close();
   fRoads
     .add(params.roads, 'layout', { '地区型（区画整理の集合）': 'district', '単純な格子＋斜め': 'grid' })

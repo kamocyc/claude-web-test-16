@@ -9,11 +9,12 @@ import {
   isSimple,
 } from '../geom/polygon.js';
 import { cleanPolygon } from '../geom/simplify.js';
-import { unionPoly } from '../geom/boolean.js';
+import { differencePoly, unionPoly } from '../geom/boolean.js';
 import { extractFaces, findSpurs } from '../geom/planarGraph.js';
 import { minAreaObb } from '../geom/obb.js';
 import { clipHalfPlane, splitPolygonByLine } from '../geom/halfplane.js';
 import type { UseZone } from '../core/params.js';
+import type { ObstacleField } from '../terrain/Obstacles.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
 import { districtContaining } from './RoadDistricts.js';
 import { trimLaneEnds } from './RoadClearance.js';
@@ -71,6 +72,8 @@ export interface Block {
   districtId: number;
   /** 用途地域, inherited from that district. Decides how the block subdivides. */
   zone: UseZone;
+  /** Growth step the district was enclosed at. 0 in a town built all at once. */
+  generation: number;
 }
 
 export interface BlockExtraction {
@@ -98,6 +101,8 @@ export interface BlockOptions {
   attributionTolerance: number;
   /** Gap a lane cut through an oversized block must keep from the roads around it. */
   laneClearance: number;
+  /** Water and scarps to carve out of the blocks. Absent on flat ground. */
+  obstacles?: ObstacleField;
 }
 
 export const DEFAULT_BLOCK_OPTIONS: BlockOptions = {
@@ -121,12 +126,58 @@ export function extractBlocks(
   const blocks: Block[] = [];
   const rejected: Polygon[] = [];
 
+  /**
+   * Take the river out of a block before anything is subdivided on it.
+   *
+   * A block that spans the water is not one block, it is two with a river
+   * between them, and handing the undivided face to `Lots` gives a row of houses
+   * standing in the channel. The pre-reject on the bounding box matters: this is
+   * a polygon boolean per block and only the handful along the river need one.
+   *
+   * A bend of the river that closes *inside* a single block is a hole, and
+   * `geom/boolean.ts` drops holes — hence the second line of defence in
+   * `Lots.finaliseLots`, which refuses any parcel whose centroid is in the water.
+   */
+  const carveWater = (parts: Polygon[], obstacles: BlockOptions['obstacles']): Polygon[] => {
+    const banks = obstacles?.banks;
+    if (!obstacles || !banks || banks.length === 0) return parts;
+    const out: Polygon[] = [];
+    for (const part of parts) {
+      // Reject on the real distance to the water, not on bounding boxes. The
+      // river's bounding box is a band across the whole town, so a box test says
+      // "maybe" for most of the blocks in it — every one of those then paid for
+      // a polygon boolean, and the ones where polygon-clipping came back empty
+      // were deleted outright. That put square holes in the middle of the town,
+      // nowhere near any water.
+      const c = centroid(part);
+      let radius = 0;
+      for (const q of part) radius = Math.max(radius, V.dist(q, c));
+      if (obstacles.terrain.waterDistance(c) > radius + 1) {
+        out.push(part);
+        continue;
+      }
+      const cut = differencePoly([part], banks as Polygon[]);
+      // Failing open: an empty result here means the boolean gave up, not that
+      // the block is entirely under water — `Lots.finaliseLots` still refuses
+      // any parcel whose centroid is wet, so keeping it costs nothing.
+      if (cut.length === 0) {
+        if (obstacles.buildable(c)) out.push(part);
+        continue;
+      }
+      out.push(...cut);
+    }
+    return out;
+  };
+
   for (const face of faces) {
     // A face walk can legitimately revisit an articulation node, producing a
     // ring that touches itself. Running it through a union decomposes those
     // into separate simple components instead of handing a figure-eight to the
     // subdivider.
-    for (const part of unionPoly([face.polygon], { tolerance: 0.05, minEdge: 0.3, minArea: 1 })) {
+    for (const part of carveWater(
+      unionPoly([face.polygon], { tolerance: 0.05, minEdge: 0.3, minArea: 1 }),
+      opts.obstacles,
+    )) {
       const cleaned = cleanPolygon(part, { tolerance: 0.05, minEdge: 0.3, minArea: 1 });
       if (!cleaned || !isSimple(cleaned)) continue;
       if (area(cleaned) < opts.minArea) {
@@ -134,13 +185,23 @@ export function extractBlocks(
         continue;
       }
 
-      // An oversized block would otherwise be dropped, leaving a conspicuous
-      // hole in the town. Run a street through it instead — which is what
-      // actually happens when a large parcel is developed.
+      // The district this face sits in decides two things, and the first of them
+      // has to be settled *before* the face is cut up.
       //
-      // The size limit is resolved before the cut, from the district the face
-      // sits in: a 工業団地 block is meant to be several times a residential one.
-      const faceZone = districtContaining(net.districts, centroid(cleaned))?.zone ?? 'lowRise';
+      // Beyond the frontier there is no estate, so there is nothing to divide.
+      // Checking after `splitOversized` is too late by then: an undeveloped face
+      // is one enormous polygon, the splitter obligingly runs lane after lane
+      // through it — thirty-two of them, up to its guard — and registers every
+      // one on the road network, so a town stopped at step 8 came out with its
+      // fields neatly gridded in 私道.
+      const faceDistrict = districtContaining(net.districts, centroid(cleaned));
+      if (faceDistrict && !faceDistrict.developed) continue;
+
+      // And the size limit: an oversized block would otherwise be dropped,
+      // leaving a conspicuous hole in the town, so a street is run through it
+      // instead — which is what actually happens when a large parcel is
+      // developed. A 工業団地 block is meant to be several times a residential one.
+      const faceZone = faceDistrict?.zone ?? 'lowRise';
       const split = splitOversized(
         cleaned,
         net,
@@ -170,6 +231,7 @@ export function extractBlocks(
           centroid: c,
           districtId: district?.id ?? -1,
           zone: district?.zone ?? 'lowRise',
+          generation: district?.generation ?? 0,
         });
       }
     }

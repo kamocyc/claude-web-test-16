@@ -294,11 +294,27 @@ export function assignLandUse(
       if (acc >= target) break;
       let next = -1;
       let nextScore = -Infinity;
+      // Once the fill has stalled badly short of target, the ceiling is the
+      // thing standing in its way rather than protecting anything: a seed whose
+      // every eligible neighbour is too big to fit under it stays a single
+      // district. On a grown partition that happened often enough to designate
+      // 3.8% of a town as industrial against a target of 18%. So the ceiling is
+      // dropped for one annexation when the estate is less than two-thirds
+      // built — one overshoot beats an estate that is a single block.
+      const stalledShort = acc < target * 0.65;
+      const limit = stalledShort ? target * 1.5 : ceiling;
       for (const i of taken) {
         for (const j of adj[i]!) {
           if (taken.has(j) || !eligible(j)) continue;
-          if (acc + districts[j]!.area > ceiling) continue;
-          const s = industrialScore(j);
+          const after = acc + districts[j]!.area;
+          if (after > limit) continue;
+          // While stalled, the question is no longer "which district is the most
+          // industrial?" but "which one gets the estate closest to the size it
+          // was asked for?". Scoring by fit rather than by merit is what keeps
+          // the one permitted overshoot from annexing a quarter of the town —
+          // taking the best-scoring neighbour instead put 44% of a suburb under
+          // factories.
+          const s = stalledShort ? -Math.abs(after - target) : industrialScore(j);
           if (s > nextScore) {
             nextScore = s;
             next = j;
