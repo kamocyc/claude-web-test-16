@@ -84,16 +84,16 @@ const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }
       '{"house":251,"apart":152,"mansion":13,"konbini":2,"vacant":8,"zakkyo":13,"shophouse":2}',
   },
   'sakura-3/district/land': {
-    lots: 665927233,
-    buildings: 2118853655,
+    lots: 2806241274,
+    buildings: 3030063825,
     counts:
-      '{"house":343,"apart":101,"vacant":22,"mansion":5,"shophouse":4,"zakkyo":7,"konbini":2,"warehouse":1,"factory":3}',
+      '{"house":348,"apart":93,"vacant":26,"mansion":8,"shophouse":4,"zakkyo":7,"konbini":2,"warehouse":1,"factory":3}',
   },
   'kaede-11/district/land': {
-    lots: 2820860226,
-    buildings: 3955422347,
+    lots: 2712753975,
+    buildings: 4255399958,
     counts:
-      '{"house":346,"vacant":45,"apart":101,"mansion":4,"warehouse":2,"factory":3,"konbini":2,"zakkyo":1}',
+      '{"house":271,"vacant":39,"apart":125,"mansion":6,"factory":3,"warehouse":2,"konbini":2}',
   },
 };
 

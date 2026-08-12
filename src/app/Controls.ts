@@ -14,7 +14,9 @@ const UP = new THREE.Vector3(0, 1, 0);
  * makes it the normal case: a hundred metres goes by in seconds, so without this
  * the car spends most of its time inside the town rather than on it, and the
  * mode is unusable. A point test against the footprint plus a margin is enough;
- * there is no vehicle body to model, and the ground is flat.
+ * there is no vehicle body to model. The ground is not flat, but the road is
+ * graded, so the car follows the carriageway's design height rather than the
+ * land under it.
  */
 class ObstacleGrid {
   private cells = new Map<number, number[]>();
@@ -105,6 +107,9 @@ function distToSegment(p: Vec2, a: Vec2, b: Vec2): number {
  * cannot turn on the spot, because those are what make the distance read as
  * distance rather than as a fly-through.
  */
+/** Ground height in world space, given plan coordinates. */
+export type GroundSampler = (x: number, z: number) => number;
+
 export type CameraMode = 'orbit' | 'walk' | 'drive';
 
 const EYE_HEIGHT = 1.62;
@@ -132,6 +137,10 @@ export class Controls {
   private mode: CameraMode = 'orbit';
   private keys = new Set<string>();
   private velocity = new THREE.Vector3();
+  private walkAt: GroundSampler = () => 0;
+  private driveAt: GroundSampler = () => 0;
+  /** Smoothed eye height, so a stair riser does not snap the view. */
+  private eyeY = 0;
   private onModeChange?: (mode: CameraMode) => void;
   /** Drive mode: the car's own heading and speed, independent of where you look. */
   private heading = 0;
@@ -168,6 +177,20 @@ export class Controls {
   /** Building footprints the street modes should not pass through. */
   setObstacles(footprints: Polygon[]): void {
     this.obstacles.set(footprints);
+  }
+
+  /**
+   * Where the ground is, for the street modes.
+   *
+   * Two samplers, not one, because they answer different questions. Walking
+   * follows whatever you are standing on — the pavement, a levelled garden, the
+   * top of a 擁壁 — while driving follows the *road*: the carriageway is graded
+   * through cuttings and over embankments, and a car that took its height from
+   * the raw terrain would submerge itself every time the street was in cut.
+   */
+  setGround(walkAt: GroundSampler, driveAt: GroundSampler): void {
+    this.walkAt = walkAt;
+    this.driveAt = driveAt;
   }
 
   /**
@@ -225,6 +248,22 @@ export class Controls {
     return this.mode;
   }
 
+  /**
+   * Ease the eye toward a target height.
+   *
+   * The ground under a Japanese hill suburb is a staircase — every lot is a
+   * level pad a riser or two above its neighbour — so sampling it and assigning
+   * straight to `position.y` makes the view jump at every boundary. A first-order
+   * lag at about 12/s is enough to read as walking rather than as teleporting,
+   * and short enough not to feel like swimming.
+   */
+  private settleEye(target: number, dt: number): void {
+    const k = 1 - Math.exp(-12 * Math.max(0, dt));
+    if (Math.abs(this.eyeY - target) > 6) this.eyeY = target;
+    else this.eyeY += (target - this.eyeY) * k;
+    this.camera.position.y = this.eyeY;
+  }
+
   setMode(mode: CameraMode): void {
     if (mode === this.mode) return;
     const previous = this.mode;
@@ -239,7 +278,9 @@ export class Controls {
         this.camera.position.copy(target).addScaledVector(dir, 12);
         this.camera.lookAt(target.x, eye, target.z);
       }
-      this.camera.position.y = eye;
+      const sampler = mode === 'drive' ? this.driveAt : this.walkAt;
+      this.eyeY = sampler(this.camera.position.x, this.camera.position.z) + eye;
+      this.camera.position.y = this.eyeY;
       if (mode === 'drive') {
         // Start pointing where the camera already points, at a standstill.
         const look = new THREE.Vector3();
@@ -254,8 +295,9 @@ export class Controls {
       this.walk.enabled = false;
       this.walk.unlock();
       this.orbit.enabled = true;
-      this.orbit.target.set(this.camera.position.x, 0, this.camera.position.z - 30);
-      this.camera.position.y = Math.max(35, this.camera.position.y);
+      const here = this.walkAt(this.camera.position.x, this.camera.position.z);
+      this.orbit.target.set(this.camera.position.x, here, this.camera.position.z - 30);
+      this.camera.position.y = Math.max(35 + this.walkAt(this.camera.position.x, this.camera.position.z), this.camera.position.y);
     }
     this.onModeChange?.(mode);
   }
@@ -270,7 +312,6 @@ export class Controls {
       return;
     }
 
-    // The ground is flat, so walking needs no raycasting — just clamp y.
     const speed = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? RUN_SPEED : WALK_SPEED;
     const forward = (this.keys.has('KeyW') ? 1 : 0) - (this.keys.has('KeyS') ? 1 : 0);
     const strafe = (this.keys.has('KeyD') ? 1 : 0) - (this.keys.has('KeyA') ? 1 : 0);
@@ -282,7 +323,7 @@ export class Controls {
       this.velocity.y = 0;
       this.step(this.velocity.x, this.velocity.z, WALK_MARGIN);
     }
-    this.camera.position.y = EYE_HEIGHT;
+    this.settleEye(this.walkAt(this.camera.position.x, this.camera.position.z) + EYE_HEIGHT, dt);
     const b = this.bounds;
     this.camera.position.x = Math.min(b, Math.max(-b, this.camera.position.x));
     this.camera.position.z = Math.min(b, Math.max(-b, this.camera.position.z));
@@ -339,7 +380,7 @@ export class Controls {
     // Hitting something square on scrubs most of the speed off rather than all
     // of it, so nudging free of a wall does not need a standing start.
     if (!moved && this.speed !== 0) this.speed *= 0.25;
-    this.camera.position.y = DRIVE_EYE;
+    this.settleEye(this.driveAt(this.camera.position.x, this.camera.position.z) + DRIVE_EYE, dt);
 
     const b = this.bounds;
     const x = Math.min(b, Math.max(-b, this.camera.position.x));

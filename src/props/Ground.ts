@@ -131,9 +131,18 @@ export function buildGround(
     quad(half - gutter, half, 0.035, kerb);
     quad(-half, -half + gutter, 0.035, kerb);
 
-    if (terrain.field) {
-      addEarthworks(earthworks, terrain, a2, b2, dir, n, half, surfaceY, params.platform.roadWallMin);
+    if (!terrain.field) return;
+
+    // A road that crosses the water gets a deck rather than an embankment. It
+    // is forty lines and it is the whole difference between "a bridge" and "the
+    // road is floating"; an embankment drawn down to the riverbed would dam the
+    // river instead.
+    const crossing = city.obstacles.waterCrossing(a2, b2);
+    if (crossing) {
+      addBridge(earthworks, a2, b2, dir, n, half, surfaceY, crossing);
+      return;
     }
+    addEarthworks(earthworks, terrain, a2, b2, dir, n, half, surfaceY, params.platform.roadWallMin);
   };
 
   // How many roads meet at each node, so a ribbon knows whether there is
@@ -181,6 +190,64 @@ export function buildGround(
   }
 
   return group;
+}
+
+/**
+ * A single-span 桁橋 where a road crosses the river.
+ *
+ * No piers: a suburban crossing of a river this size is one span, and a pier in
+ * the channel would be more geometry saying something less true. What it does
+ * need is the three things that make a bridge legible from a distance — a deck
+ * with visible thickness, a parapet along each side, and an abutment at each
+ * bank so the deck plainly lands on something.
+ */
+function addBridge(
+  buf: GeometryBuffer,
+  a: Vec2,
+  b: Vec2,
+  dir: Vec2,
+  n: Vec2,
+  half: number,
+  surfaceY: (p: Vec2, lift: number) => number,
+  crossing: { t0: number; t1: number },
+): void {
+  // The deck runs a little past the wet part at each end, onto dry ground.
+  const pad = 0.06;
+  const from = V.lerp(a, b, Math.max(0, crossing.t0 - pad));
+  const to = V.lerp(a, b, Math.min(1, crossing.t1 + pad));
+  if (V.dist(from, to) < 1) return;
+
+  const deck = (inner: number, outer: number, y0: (p: Vec2) => number, y1: (p: Vec2) => number) => {
+    const c0 = V.addScaled(from, n, inner);
+    const c1 = V.addScaled(to, n, inner);
+    const c2 = V.addScaled(to, n, outer);
+    const c3 = V.addScaled(from, n, outer);
+    // A prism between two sloping planes is not expressible here, so the slab
+    // is drawn at its two ends' heights — over a 30 m span the error is under a
+    // centimetre and it is under the deck.
+    buf.pushPrism([c0, c1, c2, c3], Math.min(y0(c0), y0(c1)), Math.max(y1(c0), y1(c1)), true, true);
+  };
+
+  // Soffit slab.
+  buf.setColor({ r: 0.6, g: 0.6, b: 0.58 });
+  deck(
+    -half,
+    half,
+    (p) => surfaceY(p, -0.75),
+    (p) => surfaceY(p, -0.02),
+  );
+
+  // 高欄 along each side.
+  buf.setColor({ r: 0.72, g: 0.72, b: 0.7 });
+  for (const side of [1, -1] as const) {
+    deck(
+      (half - 0.18) * side,
+      half * side,
+      (p) => surfaceY(p, 0.0),
+      (p) => surfaceY(p, 0.95),
+    );
+  }
+  void dir;
 }
 
 /**

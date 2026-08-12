@@ -6,6 +6,7 @@ import { clipSegmentToPolygonAll } from '../geom/polygon.js';
 import { makeFrame, toWorld, extentsIn, type Frame } from '../geom/obb.js';
 import { centroid } from '../geom/polygon.js';
 import type { District, DistrictBoundary } from './RoadDistricts.js';
+import type { ObstacleField } from '../terrain/Obstacles.js';
 import { roadWidth } from './Roads.js';
 import { spacingForGeneration } from './RoadGrowth.js';
 
@@ -271,7 +272,12 @@ function boundaryAt(boundary: DistrictBoundary[], p: Vec2, tol = 1.5): DistrictB
 }
 
 /** Lay out the local streets of one district. */
-export function districtStreets(d: District, p: RoadParams, landUse: LandUseParams): StreetLine[] {
+export function districtStreets(
+  d: District,
+  p: RoadParams,
+  landUse: LandUseParams,
+  obstacles?: ObstacleField,
+): StreetLine[] {
   if (d.area < p.minDistrictArea) return [];
 
   // Two things reach into the street grid here, and this is the only place
@@ -376,7 +382,20 @@ export function districtStreets(d: District, p: RoadParams, landUse: LandUsePara
           else end = s0 + keep;
         }
         if (end - start < p.minEdgeLength) continue;
-        out.push({ pts: [pointAtS(line.path, start), pointAtS(line.path, end)], cls: line.cls });
+        const from2 = pointAtS(line.path, start);
+        const to2 = pointAtS(line.path, end);
+        // A local street does not bridge. Where the district the grid belongs
+        // to has a river through it, the run is cut at the bank and the two
+        // halves become honest dead ends facing the water — which is what the
+        // streets either side of a small river actually do.
+        if (!obstacles) {
+          out.push({ pts: [from2, to2], cls: line.cls });
+          continue;
+        }
+        for (const [dryA, dryB] of obstacles.dryRuns(from2, to2)) {
+          if (V.dist(dryA, dryB) < p.minEdgeLength) continue;
+          out.push({ pts: [dryA, dryB], cls: line.cls });
+        }
       }
     }
   }

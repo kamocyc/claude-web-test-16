@@ -471,6 +471,89 @@ function growChain(
   return placed;
 }
 
+/**
+ * Drive roads into whatever is left unserved.
+ *
+ * The measure is the plain one: the point in the town furthest from any road,
+ * relative to the spacing that radius is supposed to have. Anything above 1 is a
+ * hole. A chain is grown from the nearest node toward it, and the search repeats
+ * until nothing is left that is more than half a spacing too far from a street.
+ *
+ * The grid scan is over a few hundred points against a spatial index, which is
+ * cheap next to what it prevents.
+ */
+function infill(
+  s: GrowState,
+  rng: Rng,
+  p: RoadParams,
+  g: GrowthParams,
+  terrain: Terrain,
+  obstacles: ObstacleField,
+): void {
+  const E = p.extent;
+  // Coarse on purpose. This is a search for *holes*, and a hole big enough to
+  // matter is a whole district — sampling it finely costs a spatial query per
+  // point per round and bought nothing but sixteen seconds of generation time.
+  const step = Math.max(26, E / 11);
+  const empty = new Set<number>();
+
+  /** Gaps already tried and found unreachable, so a round cannot pick them again. */
+  const abandoned: Vec2[] = [];
+  const isAbandoned = (q: Vec2): boolean => abandoned.some((a) => V.dist(a, q) < step);
+
+  for (let round = 0; round < 22; round++) {
+    let worst: Vec2 | null = null;
+    let worstScore = 0.85;
+    for (let y = -E + step / 2; y < E; y += step) {
+      for (let x = -E + step / 2; x < E; x += step) {
+        const q = { x, y };
+        if (!obstacles.buildable(q) || isAbandoned(q)) continue;
+        const want = tier1Spacing(townRadius(q), E, p);
+        // Capped: anything past twice the wanted spacing is a hole, and how
+        // much of a hole does not change what happens next.
+        const score = Math.min(clearanceFrom(s, q, want * 2, empty), want * 2) / want;
+        if (score > worstScore) {
+          worstScore = score;
+          worst = q;
+        }
+      }
+    }
+    if (!worst) break;
+
+    // Try the nearest few nodes, not just the nearest one. The closest node to a
+    // hole is often a dead end pointing the wrong way, or a junction whose arms
+    // leave no room for another at an acceptable angle — and giving up on the
+    // first refusal left the hole exactly where it was.
+    const byDistance = s.pts
+      .map((q, i) => ({ i, d: V.dist(q, worst!) }))
+      .filter((n) => (s.inc[n.i]?.length ?? 0) > 0)
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 6);
+
+    // Date the infill by *where* it is, not by the fact that it happened last.
+    //
+    // Stamping every infill road with the final generation was quietly the worst
+    // bug in the growth model: infill fires wherever there is a hole, holes are
+    // as common near the middle as at the edge, and a central district bounded
+    // by one came out dated as the newest thing in the town. It then took the
+    // coarsest grid and the highest share of unsold plots — so the measured
+    // density gradient ran backwards, with the centre *less* built up than the
+    // fringe. The frontier radius is `E · (step/steps)^exponent`; inverting it
+    // gives the step at which growth would have arrived here anyway.
+    const arrived = Math.pow(Math.min(1, townRadius(worst) / E), 1 / g.spreadExponent);
+    const gen = Math.max(1, Math.min(g.steps - 1, Math.round(arrived * (g.steps - 1))));
+
+    let placed = 0;
+    for (const cand of byDistance) {
+      const dir = V.normalize(V.sub(worst, s.pts[cand.i]!));
+      placed = growChain(s, rng, cand.i, dir, 'collector', gen, p, g, terrain, obstacles, E);
+      if (placed > 0) break;
+    }
+    // Genuinely unreachable — a bend of the river, the far side of a scarp.
+    if (placed === 0) abandoned.push(worst);
+  }
+}
+
 export function growSkeleton(
   seed: string,
   p: RoadParams,
@@ -581,6 +664,19 @@ export function growSkeleton(
       growChain(s, aRng, from, base, cls, step, p, g, terrain, obstacles, reach);
     }
   }
+
+  // --- Infill --------------------------------------------------------------
+  // Sprouting from a random node biases toward the parts of the town that
+  // already have roads: every attempt starts somewhere that is, by definition,
+  // already served. What it never does is *notice a hole*, and one hole in a
+  // grown town is not a gap in the street pattern — it is a face, and a face
+  // that covers a quarter of the town gets one district, one grid direction and
+  // one enormous block that the subdivider then declines to use. Measured
+  // before this pass: a single 116,000 m² district, 28% of the town, with an
+  // empty field in the middle of it.
+  //
+  // So: find the point furthest from any road, drive a road at it, repeat.
+  infill(s, rng, p, g, terrain, obstacles);
 
   // --- Close the town ------------------------------------------------------
   closeNetwork(s, p, obstacles);
