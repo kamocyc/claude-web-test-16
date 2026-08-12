@@ -47,7 +47,7 @@ export function generateCity(params: CityParams): City {
   const obstacles = clock('obstacles', () => makeObstacles(terrain, params.roads.growth));
 
   const roads = clock('roads', () =>
-    generateRoads(params.seed, params.roads, params.landUse, terrain, obstacles),
+    generateRoads(params.seed, params.roads, params.landUse, params.lots, terrain, obstacles),
   );
   // Road heights are solved before the blocks are cut, because a lot's platform
   // is levelled to the height of the street it fronts, not to the ground it

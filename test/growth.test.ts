@@ -94,7 +94,17 @@ describe('a grown town', () => {
   });
 
   it('leaves the newest estates part-sold', () => {
-    const { params, city } = grown('grow-1');
+    // At the *shipped* extent, unlike everything else here.
+    //
+    // The rest of these run a 190 m town for speed, and that is fine for
+    // questions about structure. This one is a question about a gradient across
+    // the town, and a 190 m town barely has one: three quarters of its parcels
+    // sit in the outer band whatever happens, so the mean radius of any subset
+    // of them lands within a metre or two of the mean radius of the rest, and
+    // the comparison turns on noise. It did, too — for one seed it came out the
+    // wrong way round by 1.3%, while every other seed and the shipped extent
+    // showed the effect plainly.
+    const { params, city } = grown('grow-1', DEFAULT_PARAMS.roads.growth.steps, DEFAULT_PARAMS.roads.extent);
     const plan = planBuildings(city, params);
     expect(plan.vacancyReasons['not-yet-developed'] ?? 0).toBeGreaterThan(0);
 
@@ -104,7 +114,7 @@ describe('a grown town', () => {
     const built = city.lots.filter((l) => l.vacancyReason === null);
     const meanR = (ls: typeof undeveloped) => ls.reduce((s, l) => s + radius(l.centroid), 0) / ls.length;
     expect(meanR(undeveloped)).toBeGreaterThan(meanR(built));
-  });
+  }, 60000);
 
   it('an older town is a superset of a younger one', () => {
     // The definition of growth, and the one invariant that separates it from

@@ -48,8 +48,9 @@ export interface District {
    *
    * Read as the *maximum* over the boundary: a face does not exist until its
    * last side has been built, and the last side is the newest one. It decides
-   * how finely the district grids itself, which is the largest single lever on
-   * the town's density gradient.
+   * the size of the plots the district was subdivided into — and so, through
+   * `city/LotModule.ts`, the spacing of its streets — which is the largest
+   * single lever on the town's density gradient.
    */
   generation: number;
   /**
@@ -112,9 +113,9 @@ function arrivalGeneration(c: Vec2, p: RoadParams): number {
  *
  * Neither term works alone, and both failures are quiet. The boundary alone: an
  * early arterial can run all the way to the town edge, so a fringe face bounded
- * by it and by the perimeter dates itself to generation 2, takes the finest grid
- * and sells every plot — while the middle of town, criss-crossed by later roads
- * and later infill, dates late. The measured density gradient came out flat and
+ * by it and by the perimeter dates itself to generation 2, takes the smallest
+ * plots and sells every one of them — while the middle of town, criss-crossed by
+ * later roads and later infill, dates late. The measured density gradient came out flat and
  * the unsold plots sat nearer the station than the built ones. The radius alone:
  * every district at the same distance is the same age, which throws away the
  * one thing growth was for.

@@ -14,5 +14,5 @@ import { generateRoads, type RoadNetwork } from '../src/city/Roads.js';
 export function roadsFor(params: CityParams): RoadNetwork {
   const terrain = makeTerrain(params.seed, params.terrain, params.roads.extent);
   const obstacles = makeObstacles(terrain, params.roads.growth);
-  return generateRoads(params.seed, params.roads, params.landUse, terrain, obstacles);
+  return generateRoads(params.seed, params.roads, params.landUse, params.lots, terrain, obstacles);
 }

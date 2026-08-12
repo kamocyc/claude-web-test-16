@@ -71,15 +71,6 @@ export interface LandUseParams {
   industrialShare: number;
   /** No industrial district may come closer than this to the station, metres. */
   industrialMinStationDist: number;
-  /**
-   * Street grid spacing inside an industrial district, metres.
-   *
-   * This is why land use has to be decided *inside* road generation rather than
-   * after it. A factory parcel is 3,000–4,000 m²; the ordinary 45 m grid yields
-   * blocks of 1,500–2,000 m², so no amount of lot-parameter tuning can produce
-   * one. The zone has to reach back and coarsen the streets themselves.
-   */
-  industrialLocalSpacing: number;
   /** Ring 準工業 around the industrial belt, so a factory never abuts 低層住専. */
   quasiIndustrialRing: boolean;
   /** How much Tier-1 frontage counts toward being commercial, relative to the station. */
@@ -216,9 +207,13 @@ export interface GrowthParams {
   spreadExponent: number;
   streetsPerStep: number;
   candidatesPerStreet: number;
-  /** Target street spacing at the station and at the fringe, metres. */
-  coreSpacing: number;
-  fringeSpacing: number;
+  /**
+   * Plot size at the station and at the fringe, as a multiple of the zone's own
+   * mean. The town's density gradient lives here — see `city/LotModule.ts`,
+   * which sizes the street grid to whichever plot a district is getting.
+   */
+  coreLotScale: number;
+  fringeLotScale: number;
   /** Steps between promoting a local chain to collector / a collector to arterial. */
   collectorInterval: number;
   arterialInterval: number;
@@ -286,13 +281,16 @@ export interface RoadParams {
   collectorWidth: number;
   collectorSpacing: number;
   localWidth: number;
-  /** Nominal spacing of the local street grid before warping. */
-  localSpacing: number;
   /**
-   * `grid` layout only: how much neighbouring street spacings differ, as a
-   * fraction of `localSpacing`. 0 is a perfectly even grid; 0.2 gives blocks
-   * between 0.8× and 1.2× the nominal size, which is what a real 区画整理
-   * development looks like once it has been fitted to the parcels it replaced.
+   * How much neighbouring blocks differ in *length*, as a fraction.
+   *
+   * Only along the street. A block's depth is two lot depths and is not
+   * negotiable — varying it by ±18%, which is what this number used to do to
+   * both axes at once, moved the block between 22 m and 40 m of usable depth
+   * where the lots needed 27, and the subdivider then stretched or abandoned the
+   * difference. Along the street the same variation is free: it changes how many
+   * plots fit and nothing else, and it is what stops a district reading as
+   * graph paper.
    */
   gridSpacingVariation: number;
   /** Fraction of street spans deleted outright. */
@@ -367,7 +365,17 @@ export interface LotParams {
    * survive as ground rather than vanishing.
    */
   minFrontage: number;
-  /** Mean and spread of lot depth. */
+  /**
+   * Mean and spread of lot depth.
+   *
+   * The master dimension of the whole town, not a preference. `LotModule` spaces
+   * the streets at two of these plus the road between them, so raising it does
+   * not make the lots deeper within the same blocks — it makes the blocks
+   * deeper. What it changes is the *proportion* of the plot, and through that
+   * the proportion of the house: 12.8 against a 9.6 m frontage is a plot half
+   * again as deep as it is wide, and a house a little less than that once the
+   * setbacks and the parking space are taken off the front.
+   */
   depthMean: number;
   depthSigma: number;
   depthMin: number;
@@ -600,8 +608,8 @@ export const DEFAULT_GROWTH: GrowthParams = {
   spreadExponent: 0.62,
   streetsPerStep: 10,
   candidatesPerStreet: 14,
-  coreSpacing: 40,
-  fringeSpacing: 66,
+  coreLotScale: 0.88,
+  fringeLotScale: 1.5,
   collectorInterval: 3,
   arterialInterval: 9,
   // 道路構造令 puts a 60 km/h design speed at 5–6%. Residential streets in a
@@ -661,7 +669,6 @@ export const DEFAULT_PARAMS: CityParams = {
     collectorWidth: 7,
     collectorSpacing: 170,
     localWidth: 4.8,
-    localSpacing: 45,
     gridSpacingVariation: 0.18,
     deleteFraction: 0.1,
     deadEndFraction: 0.14,
@@ -690,7 +697,6 @@ export const DEFAULT_PARAMS: CityParams = {
     commercialShare: 0.16,
     industrialShare: 0.18,
     industrialMinStationDist: 245,
-    industrialLocalSpacing: 95,
     quasiIndustrialRing: true,
     arterialFrontageWeight: 0.4,
     noiseScale: 260,
@@ -703,11 +709,11 @@ export const DEFAULT_PARAMS: CityParams = {
     widthMeanMajor: 21,
     depthMeanMajor: 24,
     minFrontage: 1.0,
-    depthMean: 13.5,
+    depthMean: 12.8,
     depthSigma: 2.5,
     depthMin: 9.5,
     depthMax: 24,
-    widthMean: 8.5,
+    widthMean: 9.6,
     widthSigma: 2,
     widthMin: 5,
     widthMax: 22,
@@ -848,7 +854,6 @@ export const ROAD_LAYOUT_PRESETS: Record<RoadLayout, RoadPreset> = {
     // extended and promoted over `growth.steps`, so the districts nearest the
     // station were enclosed first and are the smallest and finest.
     growth: { enabled: true },
-    localSpacing: 45,
     gridSpacingVariation: 0.18,
     arterialCount: 2,
     // The diagonals are the main source of districts that disagree with each
@@ -869,12 +874,12 @@ export const ROAD_LAYOUT_PRESETS: Record<RoadLayout, RoadPreset> = {
     // one-shot skeleton generator still produces it.
     growth: { enabled: false },
     // One orientation for the whole town, nothing deleted and nothing
-    // dead-ending, plus two diagonal through-roads. Coarser than the district
-    // layout: without the staggers and dead ends a 45 m grid still reads as
-    // calm, and the blocks have to be deep enough for two back-to-back rows of
-    // lots plus whatever the private lanes reach.
-    localSpacing: 52,
-    gridSpacingVariation: 0.2,
+    // dead-ending, plus two diagonal through-roads. The block size is not set
+    // here — `city/LotModule.ts` derives it from the plot either way, and a
+    // 区画整理 grid sized exactly to its plots is what a 区画整理 grid *is*. All
+    // that is left to say is that the blocks come out more even than the
+    // district layout's.
+    gridSpacingVariation: 0.1,
     // No arterials of its own: the hierarchy is assigned to the grid lines
     // instead, so a wide road never slices a block it was not part of.
     arterialCount: 0,
