@@ -239,12 +239,57 @@ const shophouseWallLayout: WallLayout = (ctx) => {
   return { fillWindows: false };
 };
 
+/**
+ * 雑居ビル — a stack of tenants, one per floor.
+ *
+ * What makes one read as a multi-tenant block rather than a small office is the
+ * *ribbon*: a continuous strip window across each floor, unbroken by piers,
+ * because the floor plate is let as one space and nobody put a wall in it. The
+ * ground floor is different — a shop or two, the door to the stair, and the
+ * shutter of whatever occupies the back.
+ */
+const zakkyoWallLayout: WallLayout = (ctx) => {
+  const { wall, spec, params, rng, slots, ground, place } = ctx;
+  const street = wall.role === 'front' || wall.isEntrance || wall.sunFacing;
+
+  if (!street) {
+    // The flank of a 雑居ビル is almost blank: a service window here and there,
+    // and otherwise the neighbour's wall a metre away.
+    for (let i = 0; i < slots; i++) {
+      place(i, 1, rng.chance(0.12) ? 'windowSmall' : 'blankPanel');
+    }
+    return { fillWindows: false };
+  }
+
+  if (ground) {
+    // The stair door takes one slot at an end; a shop takes the frontage beside
+    // it; anything left over at the far end is back-of-house behind a shutter.
+    const doorAtStart = rng.chance(0.5);
+    place(doorAtStart ? 0 : slots - 1, 1, 'tenantDoor');
+    const shopSpan = Math.max(1, Math.floor(slots * rng.range(0.5, 0.85)));
+    const shopStart = doorAtStart ? 1 : 0;
+    for (let i = shopStart; i < Math.min(slots, shopStart + shopSpan); i++) place(i, 1, 'shopfront');
+    for (let i = 0; i < slots; i++) place(i, 1, 'shutter');
+    return { fillWindows: false };
+  }
+
+  // Upper floors: the ribbon, with a pier between tenant bays.
+  const unitSlots = Math.max(3, Math.round(spec.unitWidth / params.module));
+  for (let u = 0; u < slots; u += unitSlots) {
+    const span = Math.min(unitSlots - 1, slots - u);
+    if (span < 1) break;
+    for (let i = u; i < u + span; i++) place(i, 1, 'tenantWindow');
+  }
+  for (let i = 0; i < slots; i++) place(i, 1, 'blankPanel');
+  return { fillWindows: false };
+};
+
 const LAYOUTS: Record<BuildingKind, WallLayout> = {
   house: houseWallLayout,
   apart: unitWallLayout,
   mansion: unitWallLayout,
   shophouse: shophouseWallLayout,
-  zakkyo: unitWallLayout,
+  zakkyo: zakkyoWallLayout,
   konbini: houseWallLayout,
   factory: houseWallLayout,
   warehouse: houseWallLayout,
@@ -479,6 +524,33 @@ function buildWallGeometry(
           Math.min(params.awningDepth, wall.room),
           spec,
         );
+        applyWallColor(buf, spec, floor);
+        break;
+      }
+
+      case 'tenantWindow': {
+        // Sill low and head high: a tenant strip runs nearly floor to ceiling,
+        // and the runs merge in `baysFromKinds` into one ribbon per bay.
+        const inset = 0.06;
+        const bottom = floor.y0 + 0.7;
+        const topY = yTop - 0.35;
+        solid(bay.u0, bay.u0 + inset, floor.y0, yTop);
+        solid(bay.u1 - inset, bay.u1, floor.y0, yTop);
+        solid(bay.u0 + inset, bay.u1 - inset, floor.y0, bottom);
+        solid(bay.u0 + inset, bay.u1 - inset, topY, yTop);
+        buildWindow(bufs, wall, at, bay.u0 + inset, bay.u1 - inset, bottom, topY, spec, rng, false);
+        break;
+      }
+
+      case 'tenantDoor': {
+        const doorTop = floor.y0 + 2.2;
+        const inset = 0.12;
+        solid(bay.u0, bay.u0 + inset, floor.y0, yTop);
+        solid(bay.u1 - inset, bay.u1, floor.y0, yTop);
+        solid(bay.u0 + inset, bay.u1 - inset, doorTop, yTop);
+        // Glazed, not solid: the way into a 雑居ビル is a glass door onto the
+        // stair, never the panelled front door of a house.
+        buildShopfront(bufs, wall, at, bay.u0 + inset, bay.u1 - inset, floor.y0, doorTop, spec);
         applyWallColor(buf, spec, floor);
         break;
       }
