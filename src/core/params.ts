@@ -371,6 +371,8 @@ export interface PropParams {
   gates: boolean;
   vegetation: boolean;
   laundry: boolean;
+  /** 看板・のぼり・自販機 on the shopping streets, and the industrial yard clutter. */
+  signage: boolean;
   /** Fraction of house lots that get a parked car. */
   carChance: number;
   /** Fraction of house lots that get a carport roof. */
@@ -557,6 +559,7 @@ export const DEFAULT_PARAMS: CityParams = {
     gates: true,
     vegetation: true,
     laundry: true,
+    signage: true,
     carChance: 0.7,
     carportChance: 0.15,
     laundryChance: 0.45,

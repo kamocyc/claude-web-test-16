@@ -150,6 +150,7 @@ export function buildBuilding(
     glass: glassBuf,
     metal: metalBuf,
     accent: metalBuf,
+    shutter: bufferFor(buffers, 'shutter'),
   };
 
   buildFacades(facadeBufs, mass.floors, spec, built, facadeSeed);

@@ -115,6 +115,17 @@ if (import.meta.env.DEV) {
   regenerate();
 };
 
+/** Even-odd point in ring, for the street-view helper above. */
+function pointInRing(poly: { x: number; y: number }[], p: { x: number; y: number }): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i]!;
+    const b = poly[j]!;
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
 // Handles for the screenshot tool and for poking at state from the console.
 Object.assign(window as unknown as Record<string, unknown>, {
   __viewer: viewer,
@@ -122,4 +133,62 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __params: params,
   __materials: materials,
   __controls: controls,
+  // Land use is invisible from a fixed camera position — the whole point of the
+  // zoning is that different parts of the town are different — so the shot tool
+  // needs to be able to ask where the shops and the factories actually are.
+  /**
+   * A camera standing on a street inside the given 用途地域, looking along it.
+   *
+   * Pointing a camera at a district centroid puts it inside a building or on a
+   * roof about as often as not, which makes it useless for checking the thing
+   * these zones exist to produce — the view *along* a shopping street.
+   */
+  __streetViewIn: (zone: string, eye = 4.5): [[number, number, number], [number, number, number]] | null => {
+    const d = city?.roads.districts.find((k) => k.zone === zone);
+    if (!d || !city) return null;
+    let cx = 0;
+    let cy = 0;
+    for (const p of d.polygon) {
+      cx += p.x;
+      cy += p.y;
+    }
+    cx /= d.polygon.length;
+    cy /= d.polygon.length;
+
+    // The longest road segment whose midpoint is inside the district: the street
+    // most worth standing on, and one that certainly is not inside a building.
+    let best: { a: THREE.Vector2; b: THREE.Vector2; len: number } | null = null;
+    for (const e of city.roads.edges) {
+      const a = city.roads.graph.node(e.a).p;
+      const b = city.roads.graph.node(e.b).p;
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      if (!pointInRing(d.polygon, { x: mx, y: my })) continue;
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (!best || len > best.len) best = { a: new THREE.Vector2(a.x, a.y), b: new THREE.Vector2(b.x, b.y), len };
+    }
+    if (!best) return null;
+    const t = 0.2;
+    const px = best.a.x + (best.b.x - best.a.x) * t;
+    const py = best.a.y + (best.b.y - best.a.y) * t;
+    const qx = best.a.x + (best.b.x - best.a.x) * 0.85;
+    const qy = best.a.y + (best.b.y - best.a.y) * 0.85;
+    void cx;
+    void cy;
+    return [
+      [px, eye, py],
+      [qx, eye * 0.6, qy],
+    ];
+  },
+  __zoneCentre: (zone: string): [number, number] | null => {
+    const d = city?.roads.districts.find((k) => k.zone === zone);
+    if (!d) return null;
+    let x = 0;
+    let y = 0;
+    for (const p of d.polygon) {
+      x += p.x;
+      y += p.y;
+    }
+    return [x / d.polygon.length, y / d.polygon.length];
+  },
 });

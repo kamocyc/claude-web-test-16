@@ -4,7 +4,7 @@ import { makeRng, subSeed, type Rng } from '../core/rng.js';
 import * as V from '../geom/vec2.js';
 import { groundGrime } from '../material/palettes.js';
 import type { GeometryBuffer } from '../build/GeometryBuffer.js';
-import type { BuildingSpec, Floor, Wall } from './types.js';
+import type { BuildingKind, BuildingSpec, Floor, Wall } from './types.js';
 import { KIND_RULES } from './kinds.js';
 
 /**
@@ -26,7 +26,26 @@ export type BayKind =
   | 'garage'
   | 'balcony'
   | 'blank'
-  | 'unitDoor';
+  | 'unitDoor'
+  // --- Commercial and industrial -------------------------------------------
+  /** Full-height glazing with mullions: a shop window. */
+  | 'shopfront'
+  /** A closed rolling shutter, over a shopfront or a loading bay. */
+  | 'shutter'
+  /** A tenant's strip window, merging into a ribbon along the floor. */
+  | 'tenantWindow'
+  /** The street door to the tenant stair. */
+  | 'tenantDoor'
+  /** A truck-height roller door. */
+  | 'dockDoor'
+  /** A run of high-level ventilation louvres. */
+  | 'louvre'
+  /**
+   * Wall that is deliberately blank, as opposed to `blank`, which merely means
+   * "nothing was placed here". A 長屋's party wall and a warehouse's flank are
+   * blank on purpose and must not be filled in with windows.
+   */
+  | 'blankPanel';
 
 export interface Bay {
   kind: BayKind;
@@ -43,6 +62,8 @@ export interface FacadeBuffers {
   glass: GeometryBuffer;
   metal: GeometryBuffer;
   accent: GeometryBuffer;
+  /** Rolling shutters — their own family, because the slats are a texture. */
+  shutter: GeometryBuffer;
 }
 
 export function buildFacades(
@@ -77,7 +98,7 @@ export function buildFacades(
       const key = wallKey(wall);
       const kinds = layoutWall(wall, floor, spec, params, rng, previous.get(key));
       current.set(key, kinds);
-      buildWallGeometry(bufs, wall, floor, baysFromKinds(kinds, module), spec, rng);
+      buildWallGeometry(bufs, wall, floor, baysFromKinds(kinds, module), spec, params, rng);
     }
     previous = current;
   }
@@ -100,13 +121,134 @@ function baysFromKinds(kinds: BayKind[], module: number): Bay[] {
   while (i < kinds.length) {
     const kind = kinds[i]!;
     let j = i + 1;
-    // Windows stay one slot wide; everything else merges into a run.
+    // Windows stay one slot wide; everything else merges into a run. A tenant
+    // strip window is *meant* to merge — the ribbon along a floor is the whole
+    // look of a 雑居ビル — so it is not on the exception list.
     while (j < kinds.length && kinds[j] === kind && kind !== 'window' && kind !== 'windowSmall') j++;
     bays.push({ kind, u0: margin + i * module, u1: margin + j * module });
     i = j;
   }
   return bays;
 }
+
+/** Everything a per-use wall layout gets to work with. */
+interface LayoutCtx {
+  wall: Wall;
+  floor: Floor;
+  spec: BuildingSpec;
+  params: BuildingParams;
+  rng: Rng;
+  slots: number;
+  ground: boolean;
+  /** This wall carries the front door, and this is the ground floor. */
+  entrance: boolean;
+  kinds: BayKind[];
+  place(start: number, count: number, kind: BayKind): boolean;
+}
+
+/**
+ * A wall layout fills `ctx.kinds`, and says whether the generic window fill
+ * should run afterwards.
+ *
+ * Most uses want it — leaving a wall to the fill is how the north and rear
+ * elevations get their sparse scattering. A shopfront, a loading bay and a party
+ * wall do not: their blankness is a decision, not an absence.
+ */
+type WallLayout = (ctx: LayoutCtx) => { fillWindows: boolean };
+
+/** 戸建: a front door, maybe a garage, and a balcony on the sunny side. */
+const houseWallLayout: WallLayout = (ctx) => {
+  const { wall, spec, rng, slots, ground, entrance, place } = ctx;
+  if (entrance) {
+    // Never centre the entrance: 20–38% or 62–80% along the wall.
+    const t = rng.chance(0.5) ? rng.range(0.2, 0.38) : rng.range(0.62, 0.8);
+    place(Math.min(slots - 1, Math.floor(t * slots)), 1, 'door');
+    if (spec.wantsCarPad && slots >= 5 && rng.chance(0.35)) {
+      // Draw the coin either way so the seed stream does not shift, then use
+      // it only when there is no pad to aim at.
+      const coin = rng.chance(0.5);
+      const pad = spec.carPadAt;
+      const nearA = pad ? V.dist(wall.a, pad) < V.dist(wall.b, pad) : coin;
+      place(nearA ? 0 : slots - 3, 3, 'garage');
+    }
+  }
+  // A balcony needs somewhere to project. On a tight side boundary there is
+  // none, and the wall gets ordinary windows instead — which is exactly what
+  // a real house on a narrow lot does.
+  if (!ground && wall.sunFacing && slots >= 4 && wall.room >= MIN_BALCONY_DEPTH) {
+    const span = Math.min(slots - 1, 3 + rng.int(2));
+    place(Math.max(0, Math.floor((slots - span) * rng.range(0.15, 0.85))), span, 'balcony');
+  }
+  return { fillWindows: true };
+};
+
+/** アパート・マンション: a unit rhythm of doors on the deck, balconies on the sun. */
+const unitWallLayout: WallLayout = (ctx) => {
+  const { wall, spec, params, rng, slots, entrance, place } = ctx;
+  const unitSlots = Math.max(2, Math.round(spec.unitWidth / params.module));
+  if (wall.isCorridorSide) {
+    for (let u = 0; u + unitSlots <= slots; u += unitSlots) {
+      place(u, 1, 'unitDoor');
+      if (unitSlots >= 3) place(u + unitSlots - 2, 1, 'windowSmall');
+    }
+  } else if ((wall.sunFacing || wall.role === 'front') && wall.room >= MIN_BALCONY_DEPTH) {
+    const balconySlots = Math.max(2, unitSlots - 1);
+    for (let u = 0; u + unitSlots <= slots; u += unitSlots) {
+      place(u, balconySlots, 'balcony');
+    }
+  }
+  if (entrance && spec.kind === 'mansion') {
+    place(Math.floor(slots * rng.range(0.25, 0.6)), Math.min(3, slots), 'door');
+  }
+  return { fillWindows: true };
+};
+
+/**
+ * 店舗併用住宅.
+ *
+ * The ground floor is a shop and the floors above are a house — so the floors
+ * above literally *are* the house layout, called here rather than restated. A
+ * 長屋's upper elevation is a house elevation; saying so in the code is both
+ * shorter and truer than a second copy that drifts.
+ *
+ * The side walls are the party walls. They get `blankPanel` rather than being
+ * left to the window fill, because a wall built hard against the neighbour's
+ * cannot have a window in it.
+ */
+const shophouseWallLayout: WallLayout = (ctx) => {
+  const { wall, rng, slots, ground, place } = ctx;
+  if (!ground) return houseWallLayout(ctx);
+
+  const shopFront = wall.role === 'front' || ctx.entrance;
+  if (!shopFront) {
+    for (let i = 0; i < slots; i++) place(i, 1, 'blankPanel');
+    return { fillWindows: false };
+  }
+
+  // One shop in four is shut. Free, and very much what a real 商店街 looks like
+  // — a run of open frontages with a closed shutter or two among them is the
+  // single clearest signal that these are shops and not flats.
+  const shuttered = rng.chance(0.25);
+  // The 通り土間 — the separate street door to the flat upstairs. It takes the
+  // end slot, so the shop window is the rest of the frontage.
+  const doorAtStart = rng.chance(0.5);
+  const doorSlot = doorAtStart ? 0 : slots - 1;
+  if (slots >= 3) place(doorSlot, 1, 'door');
+
+  for (let i = 0; i < slots; i++) place(i, 1, shuttered ? 'shutter' : 'shopfront');
+  return { fillWindows: false };
+};
+
+const LAYOUTS: Record<BuildingKind, WallLayout> = {
+  house: houseWallLayout,
+  apart: unitWallLayout,
+  mansion: unitWallLayout,
+  shophouse: shophouseWallLayout,
+  zakkyo: unitWallLayout,
+  konbini: houseWallLayout,
+  factory: houseWallLayout,
+  warehouse: houseWallLayout,
+};
 
 function layoutWall(
   wall: Wall,
@@ -143,78 +285,58 @@ function layoutWall(
     return true;
   };
 
-  if (spec.kind === 'house') {
-    if (entrance) {
-      // Never centre the entrance: 20–38% or 62–80% along the wall.
-      const t = rng.chance(0.5) ? rng.range(0.2, 0.38) : rng.range(0.62, 0.8);
-      place(Math.min(slots - 1, Math.floor(t * slots)), 1, 'door');
-      if (spec.wantsCarPad && slots >= 5 && rng.chance(0.35)) {
-        // Draw the coin either way so the seed stream does not shift, then use
-        // it only when there is no pad to aim at.
-        const coin = rng.chance(0.5);
-        const pad = spec.carPadAt;
-        const nearA = pad ? V.dist(wall.a, pad) < V.dist(wall.b, pad) : coin;
-        place(nearA ? 0 : slots - 3, 3, 'garage');
-      }
-    }
-    // A balcony needs somewhere to project. On a tight side boundary there is
-    // none, and the wall gets ordinary windows instead — which is exactly what
-    // a real house on a narrow lot does.
-    if (!ground && wall.sunFacing && slots >= 4 && wall.room >= MIN_BALCONY_DEPTH) {
-      const span = Math.min(slots - 1, 3 + rng.int(2));
-      place(Math.max(0, Math.floor((slots - span) * rng.range(0.15, 0.85))), span, 'balcony');
-    }
-  } else {
-    // Apartments and mansions: repeat a unit rhythm along the wall.
-    const unitSlots = Math.max(2, Math.round(spec.unitWidth / module));
-    if (wall.isCorridorSide) {
-      for (let u = 0; u + unitSlots <= slots; u += unitSlots) {
-        place(u, 1, 'unitDoor');
-        if (unitSlots >= 3) place(u + unitSlots - 2, 1, 'windowSmall');
-      }
-    } else if ((wall.sunFacing || wall.role === 'front') && wall.room >= MIN_BALCONY_DEPTH) {
-      const balconySlots = Math.max(2, unitSlots - 1);
-      for (let u = 0; u + unitSlots <= slots; u += unitSlots) {
-        place(u, balconySlots, 'balcony');
-      }
-    }
-    if (entrance && spec.kind === 'mansion') {
-      place(Math.floor(slots * rng.range(0.25, 0.6)), Math.min(3, slots), 'door');
-    }
-  }
+  const { fillWindows } = LAYOUTS[spec.kind]({
+    wall,
+    floor,
+    spec,
+    params,
+    rng,
+    slots,
+    ground,
+    entrance,
+    kinds,
+    place,
+  });
 
-  // Inherit the pattern from the floor below wherever that floor had an
-  // opening, so windows stack vertically. This is the highest-value rule in the
-  // whole grammar — misaligned openings read as wrong immediately, even to
-  // someone who could not say why.
-  if (below) {
-    for (let i = 0; i < Math.min(slots, below.length); i++) {
+  if (fillWindows) {
+    // Inherit the pattern from the floor below wherever that floor had an
+    // opening, so windows stack vertically. This is the highest-value rule in the
+    // whole grammar — misaligned openings read as wrong immediately, even to
+    // someone who could not say why.
+    if (below) {
+      for (let i = 0; i < Math.min(slots, below.length); i++) {
+        if (kinds[i] !== 'blank') continue;
+        const under = below[i]!;
+        if (under === 'blank') continue;
+        if (!rng.chance(params.bayAlignChance)) continue;
+        // A door or garage below becomes an ordinary window above. So does a
+        // shopfront: the flat over a shop has a window where the shop has glass.
+        kinds[i] =
+          under === 'door' || under === 'garage' || under === 'unitDoor' ||
+          under === 'shopfront' || under === 'shutter' || under === 'blankPanel'
+            ? 'window'
+            : under;
+      }
+    }
+
+    // Fill the rest with windows, at a probability that depends on which way the
+    // wall faces. North and rear elevations really are much blanker in Japan.
+    const p =
+      wall.role === 'front'
+        ? wall.sunFacing
+          ? 0.75
+          : 0.55
+        : wall.sunFacing
+          ? 0.6
+          : wall.role === 'rear'
+            ? 0.22
+            : 0.3;
+    for (let i = 0; i < slots; i++) {
       if (kinds[i] !== 'blank') continue;
-      const under = below[i]!;
-      if (under === 'blank') continue;
-      if (!rng.chance(params.bayAlignChance)) continue;
-      // A door or garage below becomes an ordinary window above.
-      kinds[i] = under === 'door' || under === 'garage' || under === 'unitDoor' ? 'window' : under;
+      // A slot the floor below deliberately left blank usually stays blank.
+      if (below && below[i] === 'blank' && rng.chance(params.bayAlignChance)) continue;
+      if (rng.chance(p)) kinds[i] = ground && rng.chance(0.25) ? 'windowSmall' : 'window';
     }
-  }
-
-  // Fill the rest with windows, at a probability that depends on which way the
-  // wall faces. North and rear elevations really are much blanker in Japan.
-  const p =
-    wall.role === 'front'
-      ? wall.sunFacing
-        ? 0.75
-        : 0.55
-      : wall.sunFacing
-        ? 0.6
-        : wall.role === 'rear'
-          ? 0.22
-          : 0.3;
-  for (let i = 0; i < slots; i++) {
-    if (kinds[i] !== 'blank') continue;
-    // A slot the floor below deliberately left blank usually stays blank.
-    if (below && below[i] === 'blank' && rng.chance(params.bayAlignChance)) continue;
-    if (rng.chance(p)) kinds[i] = ground && rng.chance(0.25) ? 'windowSmall' : 'window';
   }
 
   // Mirroring the slot order doubles apparent variety for nothing, and is
@@ -235,12 +357,33 @@ function applyWallColor(buf: GeometryBuffer, spec: BuildingSpec, floor: Floor): 
   buf.setColor({ r: c.r * shade, g: c.g * shade, b: c.b * shade });
 }
 
+/**
+ * The 看板 band across the top of a shop storey, if this wall has one.
+ *
+ * The grammar below is one-dimensional per wall: bays are *columns*. A sign
+ * band, a 幕板 and a parapet fascia are *rows*, and trying to express a row as a
+ * `BayKind` fights the grammar — it would have to be placed in every slot and
+ * would then merge, or not, according to rules written for openings.
+ *
+ * So rows are a pre-pass. The band is drawn across the full width, and the bays
+ * are laid into whatever height is left. A wall with no band returns 0 and
+ * everything below behaves exactly as it did.
+ */
+function signBandHeight(wall: Wall, floor: Floor, spec: BuildingSpec, params: BuildingParams): number {
+  if (floor.index !== 0) return 0;
+  if (spec.kind !== 'shophouse' && spec.kind !== 'konbini' && spec.kind !== 'zakkyo') return 0;
+  if (wall.role !== 'front' && !wall.isEntrance) return 0;
+  // Never eat so much of the storey that the shop window stops being a window.
+  return Math.min(params.signBandHeight, (floor.y1 - floor.y0) * 0.3);
+}
+
 function buildWallGeometry(
   bufs: FacadeBuffers,
   wall: Wall,
   floor: Floor,
   bays: Bay[],
   spec: BuildingSpec,
+  params: BuildingParams,
   rng: Rng,
 ): void {
   const buf = bufs.wall;
@@ -249,9 +392,14 @@ function buildWallGeometry(
   const at = (u: number, offset = 0): Vec2 =>
     V.addScaled(V.addScaled(wall.a, wall.dir, u), wall.normal, offset);
 
+  const band = signBandHeight(wall, floor, spec, params);
+  // Everything below works to `yTop` rather than `floor.y1`, so a banded wall
+  // simply has a shorter storey to lay openings into.
+  const yTop = floor.y1 - band;
+
   const sill = floor.y0 + KIND_RULES[spec.kind].sill;
-  const head = floor.y1 - 0.42;
-  const wallH = floor.y1 - floor.y0;
+  const head = yTop - 0.42;
+  const wallH = yTop - floor.y0;
 
   // Solid wall panels between openings, drawn as three bands so the opening
   // punches through.
@@ -262,12 +410,12 @@ function buildWallGeometry(
   };
 
   for (const bay of bays) {
-    solid(cursor, bay.u0, floor.y0, floor.y1);
+    solid(cursor, bay.u0, floor.y0, yTop);
     cursor = bay.u1;
 
     switch (bay.kind) {
       case 'blank':
-        solid(bay.u0, bay.u1, floor.y0, floor.y1);
+        solid(bay.u0, bay.u1, floor.y0, yTop);
         break;
 
       case 'window':
@@ -275,10 +423,10 @@ function buildWallGeometry(
         const inset = bay.kind === 'windowSmall' ? 0.22 : 0.12;
         const top = bay.kind === 'windowSmall' ? sill + (head - sill) * 0.55 : head;
         const bottom = bay.kind === 'windowSmall' ? sill + 0.35 : sill;
-        solid(bay.u0, bay.u0 + inset, floor.y0, floor.y1);
-        solid(bay.u1 - inset, bay.u1, floor.y0, floor.y1);
+        solid(bay.u0, bay.u0 + inset, floor.y0, yTop);
+        solid(bay.u1 - inset, bay.u1, floor.y0, yTop);
         solid(bay.u0 + inset, bay.u1 - inset, floor.y0, bottom);
-        solid(bay.u0 + inset, bay.u1 - inset, top, floor.y1);
+        solid(bay.u0 + inset, bay.u1 - inset, top, yTop);
         buildWindow(bufs, wall, at, bay.u0 + inset, bay.u1 - inset, bottom, top, spec, rng, floor.index === 0);
         break;
       }
@@ -287,36 +435,212 @@ function buildWallGeometry(
       case 'unitDoor': {
         const doorTop = floor.y0 + 2.05;
         const inset = 0.14;
-        solid(bay.u0, bay.u0 + inset, floor.y0, floor.y1);
-        solid(bay.u1 - inset, bay.u1, floor.y0, floor.y1);
-        solid(bay.u0 + inset, bay.u1 - inset, doorTop, floor.y1);
+        solid(bay.u0, bay.u0 + inset, floor.y0, yTop);
+        solid(bay.u1 - inset, bay.u1, floor.y0, yTop);
+        solid(bay.u0 + inset, bay.u1 - inset, doorTop, yTop);
         buildDoor(bufs, wall, at, bay.u0 + inset, bay.u1 - inset, floor.y0, doorTop, spec);
         break;
       }
 
       case 'garage': {
         const top = floor.y0 + 2.25;
-        solid(bay.u0, bay.u1, top, floor.y1);
+        solid(bay.u0, bay.u1, top, yTop);
         buildGarageOpening(bufs, wall, at, bay.u0, bay.u1, floor.y0, top, spec);
+        break;
+      }
+
+      case 'blankPanel':
+        solid(bay.u0, bay.u1, floor.y0, yTop);
+        break;
+
+      case 'shopfront': {
+        buildShopfront(bufs, wall, at, bay.u0, bay.u1, floor.y0, yTop, spec);
+        buildAwning(
+          bufs,
+          at,
+          bay.u0,
+          bay.u1,
+          Math.min(yTop, floor.y0 + 2.45),
+          Math.min(params.awningDepth, wall.room),
+          spec,
+        );
+        applyWallColor(buf, spec, floor);
+        break;
+      }
+
+      case 'shutter': {
+        buildShutter(bufs, wall, at, bay.u0, bay.u1, floor.y0, yTop);
+        buildAwning(
+          bufs,
+          at,
+          bay.u0,
+          bay.u1,
+          Math.min(yTop, floor.y0 + 2.45),
+          Math.min(params.awningDepth, wall.room),
+          spec,
+        );
+        applyWallColor(buf, spec, floor);
         break;
       }
 
       case 'balcony': {
         // The opening behind the balcony is a full-height sliding door.
-        const top = floor.y1 - 0.35;
+        const top = yTop - 0.35;
         const bottom = floor.y0 + 0.06;
-        solid(bay.u0, bay.u1, top, floor.y1);
+        solid(bay.u0, bay.u1, top, yTop);
         buildWindow(bufs, wall, at, bay.u0 + 0.1, bay.u1 - 0.1, bottom, top, spec, rng, false);
-        solid(bay.u0, bay.u0 + 0.1, floor.y0, floor.y1);
-        solid(bay.u1 - 0.1, bay.u1, floor.y0, floor.y1);
+        solid(bay.u0, bay.u0 + 0.1, floor.y0, yTop);
+        solid(bay.u1 - 0.1, bay.u1, floor.y0, yTop);
         buildBalcony(bufs, at, bay.u0, bay.u1, floor.y0, spec, wall.room);
         break;
       }
     }
     applyWallColor(buf, spec, floor);
   }
-  solid(cursor, wall.len, floor.y0, floor.y1);
+  solid(cursor, wall.len, floor.y0, yTop);
+
+  // The 看板 band, drawn last so it sits over whatever the bays left. It is a
+  // shallow projecting box rather than a flat panel: the shadow line under it is
+  // most of what makes a shopfront read as one from across the street.
+  if (band > 0.01) {
+    const b = bufs.accent;
+    b.setColor(spec.accentColor);
+    const proj = 0.12;
+    const corners: Vec2[] = [at(0), at(wall.len), at(wall.len, proj), at(0, proj)];
+    b.pushPrism(corners, yTop, floor.y1, true, true);
+  }
   void wallH;
+}
+
+/**
+ * A shop window: a low plinth, full-height glazing, and mullions.
+ *
+ * The plinth matters more than it sounds. Glass taken all the way to the ground
+ * reads as a gap in the building rather than a window, and every real shopfront
+ * has a 腰壁 of a few hundred millimetres under the glass for exactly the
+ * practical reasons that make it look right.
+ */
+function buildShopfront(
+  bufs: FacadeBuffers,
+  wall: Wall,
+  at: (u: number, o?: number) => Vec2,
+  u0: number,
+  u1: number,
+  y0: number,
+  y1: number,
+  spec: BuildingSpec,
+): void {
+  if (u1 - u0 < 0.2 || y1 - y0 < 0.5) return;
+  const plinth = 0.28;
+  const reveal = 0.08;
+  const w = bufs.wall;
+  w.pushWallQuad(at(u0), at(u1), y0, y0 + plinth, u0);
+
+  const g = bufs.glass;
+  const a = at(u0, -reveal);
+  const b = at(u1, -reveal);
+  g.pushQuad(
+    { x: a.x, y: y0 + plinth, z: a.y },
+    { x: a.x, y: y1, z: a.y },
+    { x: b.x, y: y1, z: b.y },
+    { x: b.x, y: y0 + plinth, z: b.y },
+    { x: wall.normal.x, y: 0, z: wall.normal.y },
+  );
+
+  // Mullions every two modules, plus the frame. Shopfront framing is heavier
+  // than a domestic sash and darker; it is what separates the glass into panes
+  // at the distance the building is actually seen from.
+  const m = bufs.metal;
+  m.setColor(spec.sashColor);
+  const bar = 0.07;
+  const pushBar = (ua: number, ub: number, ya: number, yb: number) => {
+    const p0 = at(ua, -reveal + 0.02);
+    const p1 = at(ub, -reveal + 0.02);
+    m.pushQuad(
+      { x: p0.x, y: ya, z: p0.y },
+      { x: p0.x, y: yb, z: p0.y },
+      { x: p1.x, y: yb, z: p1.y },
+      { x: p1.x, y: ya, z: p1.y },
+      { x: wall.normal.x, y: 0, z: wall.normal.y },
+    );
+  };
+  pushBar(u0, u1, y0 + plinth, y0 + plinth + bar);
+  pushBar(u0, u1, y1 - bar, y1);
+  pushBar(u0, u0 + bar, y0 + plinth, y1);
+  pushBar(u1 - bar, u1, y0 + plinth, y1);
+  const panes = Math.max(1, Math.round((u1 - u0) / 1.8));
+  for (let i = 1; i < panes; i++) {
+    const u = u0 + ((u1 - u0) * i) / panes;
+    pushBar(u - bar / 2, u + bar / 2, y0 + plinth, y1);
+  }
+}
+
+/** A closed rolling shutter. The slats come from the texture, not from geometry. */
+function buildShutter(
+  bufs: FacadeBuffers,
+  wall: Wall,
+  at: (u: number, o?: number) => Vec2,
+  u0: number,
+  u1: number,
+  y0: number,
+  y1: number,
+): void {
+  if (u1 - u0 < 0.2 || y1 - y0 < 0.3) return;
+  const sh = bufs.shutter;
+  sh.setColor({ r: 0.74, g: 0.76, b: 0.77 });
+  const inset = 0.1;
+  const a = at(u0, -inset);
+  const b = at(u1, -inset);
+  sh.pushQuad(
+    { x: a.x, y: y0, z: a.y },
+    { x: a.x, y: y1, z: a.y },
+    { x: b.x, y: y1, z: b.y },
+    { x: b.x, y: y0, z: b.y },
+    { x: wall.normal.x, y: 0, z: wall.normal.y },
+  );
+  // Reveal sides, so the shutter reads as set back into its opening.
+  const w = bufs.wall;
+  for (const [uu, flip] of [[u0, false], [u1, true]] as const) {
+    const p0 = at(uu, 0);
+    const p1 = at(uu, -inset);
+    const [q0, q1] = flip ? [p0, p1] : [p1, p0];
+    w.pushQuad(
+      { x: q0.x, y: y0, z: q0.y },
+      { x: q1.x, y: y0, z: q1.y },
+      { x: q1.x, y: y1, z: q1.y },
+      { x: q0.x, y: y1, z: q0.y },
+    );
+  }
+}
+
+/**
+ * 庇 — the shop awning, a thin slab with a fascia on its front edge.
+ *
+ * Clamped to `wall.room`, the same way a balcony is. A real 庇 does project over
+ * the pavement, and this one would like to; but the invariant this codebase
+ * holds — and `test/buildings.test.ts` checks — is that nothing crosses the lot
+ * boundary, and a 長屋 is built hard against both of its own. Clamping loses a
+ * little of the overhang and keeps the invariant true everywhere.
+ */
+function buildAwning(
+  bufs: FacadeBuffers,
+  at: (u: number, o?: number) => Vec2,
+  u0: number,
+  u1: number,
+  y: number,
+  depth: number,
+  spec: BuildingSpec,
+): void {
+  if (depth < 0.25 || u1 - u0 < 0.4) return;
+  const slab: Vec2[] = [at(u0), at(u1), at(u1, depth), at(u0, depth)];
+  const w = bufs.wall;
+  w.setColor({ r: 0.8, g: 0.79, b: 0.77 });
+  w.pushPrism(slab, y, y + 0.07, true, true);
+  // Fascia: a shallow upstand on the outer edge, in the shop's own colour.
+  const f = bufs.accent;
+  f.setColor(spec.accentColor);
+  const edge: Vec2[] = [at(u0, depth - 0.06), at(u1, depth - 0.06), at(u1, depth), at(u0, depth)];
+  f.pushPrism(edge, y - 0.22, y + 0.07, true, true);
 }
 
 function buildWindow(

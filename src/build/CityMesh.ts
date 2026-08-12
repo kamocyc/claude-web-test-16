@@ -10,6 +10,8 @@ import type { StyleVector, VacancyReason } from '../building/types.js';
 import type { Lot } from '../city/Lots.js';
 import { buildGround } from '../props/Ground.js';
 import { buildSiteProps } from '../props/SiteProps.js';
+import { buildCommercialProps } from '../props/CommercialProps.js';
+import { KIND_RULES } from '../building/kinds.js';
 import { PropRegistry } from '../props/PropRegistry.js';
 import type { MaterialLibrary } from '../material/materials.js';
 import { ChunkedMeshBuilder } from './MeshMerger.js';
@@ -113,6 +115,12 @@ export function buildCityMesh(
     if (built.envelope.buildable) buildableDebug.push(built.envelope.buildable);
     footprintDebug.push(built.footprint.outline);
     buildSiteProps(props, lot, built.spec, built, params, makeRng(subSeed(lot.seed, 'props')));
+    // A separate sub-seed namespace, so adding street furniture to the shops
+    // cannot move the random stream that decides where a house's shrubs go.
+    const group = KIND_RULES[built.spec.kind].group;
+    if (group === 'commercial') {
+      buildCommercialProps(props, lot, built.spec, built, params, makeRng(subSeed(lot.seed, 'shopProps')));
+    }
   }
 
   group.add(chunks.build(materials));

@@ -167,6 +167,7 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fProps.add(params.props, 'parking').name('駐車場・カーポート');
   fProps.add(params.props, 'gates').name('門柱・郵便受け');
   fProps.add(params.props, 'vegetation').name('庭木・植木鉢');
+  fProps.add(params.props, 'signage').name('看板・のぼり・自販機');
   fProps.add(params.props, 'carChance', 0, 1, 0.05).name('駐車率');
   fProps.add(params.props, 'carportChance', 0, 1, 0.05).name('カーポート率');
 
