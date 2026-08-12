@@ -49,6 +49,12 @@ function regenerate(): void {
     mesh = buildCityMesh(city, params, materials);
     viewer.scene.add(mesh.group);
     overlay.rebuild(city, { buildable: mesh.buildableDebug, footprints: mesh.footprintDebug });
+    controls.setObstacles(mesh.footprintDebug);
+    // Re-exposed on every regeneration rather than in the static handle block
+    // below, because it is a different set of polygons each time. Used to check
+    // from the console — or from a script — that the street modes really are
+    // staying out of the buildings.
+    (window as unknown as Record<string, unknown>).__footprints = mesh.footprintDebug;
     generateMs = performance.now() - t0;
 
     loading.classList.add('hidden');
@@ -76,7 +82,8 @@ viewer.onUpdate((dt) => {
     `props       ${cityStats?.propInstances ?? 0}`,
     `generate    ${generateMs.toFixed(0)} ms`,
     `fps         ${s.fps.toFixed(0)}`,
-    `mode        ${controls.currentMode}`,
+    `mode        ${controls.currentMode}` +
+      (controls.currentMode === 'drive' ? `  ${controls.speedKmh.toFixed(0)} km/h` : ''),
   ].join('\n');
 });
 

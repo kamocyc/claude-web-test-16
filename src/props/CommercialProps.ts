@@ -11,6 +11,12 @@ import { PropRegistry } from './PropRegistry.js';
 /**
  * The street furniture of a shopping street: 袖看板, のぼり, 自販機, bollards.
  *
+ * **`PropRegistry.add` puts `d` along `dir` and `w` across it.** Worth stating
+ * because getting it backwards is silent: a 袖看板 given `dir = wall.dir` comes
+ * out as a thin plate lying *along* the wall and floating half a metre off it,
+ * which is both the wrong object and detached from the building. Anything that
+ * projects from a wall takes `dir = wall.normal`.
+ *
  * This is where most of the *reading* of a 商店街 comes from, and the reason is
  * scale. The buildings behind it are barely different from houses — two storeys,
  * tiled roof, the same wall colours. What says "shops" is the clutter in front:
@@ -78,7 +84,7 @@ function buildKonbiniFurniture(
     const top = built.mass.height;
     props.add(
       'signPanel',
-      V.addScaled(mid, wall.normal, 0.1),
+      V.addScaled(mid, wall.normal, 0.05),
       top + 0.45,
       { w: 0.18, h: 0.75, d: wall.len - 0.3 },
       wall.dir,
@@ -117,19 +123,22 @@ function buildShopSigns(
   const wall = built.mass.floors[0]?.walls.find((w) => V.dot(w.normal, front.outward) > 0.7);
   if (!wall) return;
 
-  // One projecting sign, at first-floor level where it clears the awning.
+  // One projecting sign, at first-floor level where it clears the awning. It
+  // runs *out* from the wall — that is what a 袖看板 is, and why it is readable
+  // from along the street rather than only from in front of the shop — so it
+  // faces along the normal, and starts at the wall face so it is attached to it.
   if (rng.chance(0.75)) {
     const u = wall.len * rng.range(0.15, 0.7);
     const base = V.addScaled(wall.a, wall.dir, u);
-    const depth = rng.range(0.55, 0.95);
+    const depth = Math.min(rng.range(0.55, 0.95), Math.max(0.35, wall.room + 0.4));
     const h = rng.range(0.9, 1.6);
     const y = rng.range(3.4, 4.4);
     props.add(
       'wallSign',
-      V.addScaled(base, wall.normal, depth / 2 + 0.05),
+      V.addScaled(base, wall.normal, depth / 2 - 0.04),
       y,
       { w: 0.12, h, d: depth },
-      wall.dir,
+      wall.normal,
       rgb(rng.pick(SIGN_FACE)),
     );
   }
@@ -190,10 +199,10 @@ function buildTenantSigns(
     const y = f * spec.floorHeight + spec.floorHeight * 0.5;
     props.add(
       'wallSign',
-      V.addScaled(base, wall.normal, depth / 2 + 0.05),
+      V.addScaled(base, wall.normal, depth / 2 - 0.04),
       y,
       { w: 0.1, h: spec.floorHeight * 0.55, d: depth },
-      wall.dir,
+      wall.normal,
       rgb(rng.pick(SIGN_FACE)),
     );
   }

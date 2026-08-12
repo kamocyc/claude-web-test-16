@@ -31,8 +31,10 @@ const OVERLAY_LAYERS: [OverlayLayer, string][] = [
   ['flagPoles', '旗竿地の竿'],
   ['vacantUnavoidable', '空き地（やむを得ない）'],
   ['vacantAvoidable', '空き地（要調査）'],
-  ['landUse', '用途（敷地の色分け）'],
-  ['useZones', '用途地域（地区）'],
+  ['landUse', '用途（敷地の輪郭）'],
+  ['useZones', '用途地域（地区の輪郭）'],
+  ['useFill', '用途（敷地の塗り分け）'],
+  ['zoneFill', '用途地域（地区の塗り分け）'],
 ];
 
 export function createDebugUI(opts: DebugUIOptions): GUI {
@@ -50,6 +52,7 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
     },
     regenerate: () => regenerate(),
     walkMode: () => controls.setMode('walk'),
+    driveMode: () => controls.setMode('drive'),
   };
 
   gui.add(actions, 'seed').name('シード').onFinishChange((v: string) => {
@@ -59,6 +62,7 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   gui.add(actions, 'regenerate').name('再生成');
   gui.add(actions, 'randomSeed').name('ランダムシード');
   gui.add(actions, 'walkMode').name('歩行モード (W)');
+  gui.add(actions, 'driveMode').name('走行モード (C)');
 
   // --- Overlays ------------------------------------------------------------
   const fOverlay = gui.addFolder('デバッグ表示').close();

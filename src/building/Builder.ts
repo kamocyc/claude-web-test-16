@@ -1,7 +1,9 @@
+import type { Polygon, Vec2 } from '../core/types.js';
 import type { BuildingParams } from '../core/params.js';
 import { makeRng, subSeed } from '../core/rng.js';
 import * as V from '../geom/vec2.js';
-import { contains } from '../geom/polygon.js';
+import { centroid, contains } from '../geom/polygon.js';
+import { offsetInward } from '../geom/offset.js';
 import type { Lot } from '../city/Lots.js';
 import { GeometryBuffer } from '../build/GeometryBuffer.js';
 import type { MaterialFamily } from '../material/materials.js';
@@ -163,7 +165,9 @@ export function buildBuilding(
     b: spec.roofColor.b * spec.valueShift,
   });
   const tall = mass.stacks[0]!;
-  let topPeak = 0;
+  // The surface rooftop plant stands on, which on a flat roof is the slab and
+  // not the top of the parapet.
+  let topDeck = 0;
 
   // The eaves overhang every wall, so on a 0.5 m side setback two neighbours'
   // roofs met in the middle. Clamp to the tightest wall on the building; a
@@ -183,7 +187,7 @@ export function buildBuilding(
         'flat',
       );
     } else {
-      topPeak = buildRoof(roofBuf, stack, stack.y1, roofSpec).peak;
+      topDeck = buildRoof(roofBuf, stack, stack.y1, roofSpec).deck;
     }
   }
 
@@ -210,12 +214,18 @@ export function buildBuilding(
     // being able to name it. What it does have is two or three condensers in a
     // row behind the parapet.
     metalBuf.setColor({ r: 0.72, g: 0.73, b: 0.73 });
-    const c = tall.polygon.reduce((s2, p) => ({ x: s2.x + p.x / tall.polygon.length, y: s2.y + p.y / tall.polygon.length }), { x: 0, y: 0 });
+    // Kept inside the parapet, and standing on the slab rather than on the
+    // upstand — see `RoofResult.deck`.
+    const inner = offsetInward(tall.polygon, 1.0)[0] ?? tall.polygon;
+    const c = centroid(inner);
     const dir = mass.floors[0]!.walls[0]?.dir ?? { x: 1, y: 0 };
     const n = 2 + rng.int(2);
+    // Spread only as far as the roof actually reaches.
+    const reach = Math.min(1.5, Math.max(0, spreadRoom(inner, c, dir) / Math.max(1, n)));
+    const base = tall.y1 + topDeck;
     for (let i = 0; i < n; i++) {
-      const p = V.addScaled(c, dir, (i - (n - 1) / 2) * 1.5);
-      metalBuf.pushOrientedBox(p.x, p.y, dir, 0.9, 1.2, tall.y1 + 0.15, tall.y1 + 1.05);
+      const p = V.addScaled(c, dir, (i - (n - 1) / 2) * reach);
+      metalBuf.pushOrientedBox(p.x, p.y, dir, 0.9, 1.2, base - 0.02, base + 0.88);
     }
   }
 
@@ -223,7 +233,7 @@ export function buildBuilding(
     buildRooftopPlant(
       { wall: concreteBuf, metal: metalBuf },
       tall.polygon,
-      tall.y1 + topPeak,
+      tall.y1 + topDeck,
       spec,
       rng,
     );
@@ -276,4 +286,15 @@ function buildDownspouts(
       }
     }
   }
+}
+
+/** How far a run of boxes may spread along `dir` before leaving the polygon. */
+function spreadRoom(poly: Polygon, c: Vec2, dir: Vec2): number {
+  let room = Infinity;
+  for (const sign of [1, -1]) {
+    let t = 0;
+    while (t < 12 && contains(poly, V.addScaled(c, dir, sign * (t + 0.5)))) t += 0.5;
+    room = Math.min(room, t);
+  }
+  return room * 2;
 }

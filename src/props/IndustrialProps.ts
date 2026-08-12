@@ -98,7 +98,7 @@ function buildDockBumpers(
   const step = 6.0;
   for (let u = step; u < wall.len - 1; u += step) {
     for (const d of [-0.6, 0.6]) {
-      const p = V.addScaled(V.addScaled(wall.a, wall.dir, u + d), wall.normal, 0.12);
+      const p = V.addScaled(V.addScaled(wall.a, wall.dir, u + d), wall.normal, 0.08);
       props.add('dockBumper', p, 1.05, { w: 0.22, h: 0.5, d: 0.3 }, wall.dir, dark);
     }
   }
