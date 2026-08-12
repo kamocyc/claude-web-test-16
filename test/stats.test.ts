@@ -2,6 +2,7 @@ import { describe, it } from 'vitest';
 import { DEFAULT_PARAMS, applyRoadLayout, cloneParams, type RoadLayout } from '../src/core/params.js';
 import { generateCity } from '../src/city/City.js';
 import { clearanceViolations } from '../src/city/RoadClearance.js';
+import { districtAdjacency } from '../src/city/LandUse.js';
 import { planBuildings } from '../src/build/CityMesh.js';
 import { UNAVOIDABLE_VACANCY } from '../src/building/types.js';
 
@@ -57,6 +58,34 @@ describe('city statistics', () => {
     const dAreas = city.roads.districts.map((d) => d.area).sort((a, b) => a - b);
     const dq = (f: number) => dAreas[Math.floor(dAreas.length * f)]?.toFixed(0) ?? '-';
 
+    // 用途地域. The two numbers that matter are the industrial share — the fill
+    // is area-targeted and the districts are very uneven, so overshoot is the
+    // failure mode — and whether the belt came out as one piece.
+    const zones: Record<string, number> = {};
+    for (const d of city.roads.districts) zones[d.zone] = (zones[d.zone] ?? 0) + 1;
+    const indust = city.roads.districts.filter((d) => d.zone === 'industrial');
+    const industArea = indust.reduce((s2, d) => s2 + d.area, 0);
+    const townArea = Math.pow(2 * params.roads.extent, 2);
+    const adj = districtAdjacency(city.roads.districts);
+    const industIdx = new Set(indust.map((d) => city.roads.districts.indexOf(d)));
+    let reached = 0;
+    if (industIdx.size > 0) {
+      const stack = [[...industIdx][0]!];
+      const seen = new Set(stack);
+      while (stack.length > 0) {
+        const i = stack.pop()!;
+        reached++;
+        for (const j of adj[i]!) {
+          if (!industIdx.has(j) || seen.has(j)) continue;
+          seen.add(j);
+          stack.push(j);
+        }
+      }
+    }
+    const stationDist = Math.min(
+      ...indust.flatMap((d) => d.polygon.map((p) => Math.hypot(p.x - city.roads.station.x, p.y - city.roads.station.y))),
+    );
+
     const tier1 = city.roads.edges.filter((e) => e.cls !== 'local').length;
     const violations = clearanceViolations(city.roads, {
       clearance: params.roads.roadClearance,
@@ -70,6 +99,11 @@ describe('city statistics', () => {
         `roads:      ${city.roads.edges.length} edges (${tier1} tier-1), ${city.roads.privateLanes.length} private lanes`,
         `districts:  ${city.roads.districts.length}, axes ${axes.map((a) => a.toFixed(0)).join('/')} (spread ${spread.toFixed(0)}°)`,
         `dist area:  p10=${dq(0.1)} p50=${dq(0.5)} p90=${dq(0.9)} max=${dAreas[dAreas.length - 1]?.toFixed(0)} m²`,
+        `zones:      ${JSON.stringify(zones)}`,
+        `industrial: ${indust.length} districts / ${industArea.toFixed(0)} m²` +
+          ` (${((industArea / townArea) * 100).toFixed(1)}%, target ${(params.landUse.industrialShare * 100).toFixed(0)}%),` +
+          ` contiguous=${indust.length === 0 ? 'n/a' : reached === indust.length ? 'yes' : `NO (${reached}/${indust.length})`},` +
+          ` station ${Number.isFinite(stationDist) ? stationDist.toFixed(0) : '-'} m`,
         `clearance:  ${violations.length} violations`,
         `blocks:     ${city.blocks.length} (rejected ${city.rejectedBlocks.length})`,
         `lots:       ${city.lots.length}  flag lots: ${flag}`,

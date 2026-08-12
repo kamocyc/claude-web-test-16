@@ -13,7 +13,9 @@ import { unionPoly } from '../geom/boolean.js';
 import { extractFaces, findSpurs } from '../geom/planarGraph.js';
 import { minAreaObb } from '../geom/obb.js';
 import { clipHalfPlane, splitPolygonByLine } from '../geom/halfplane.js';
+import type { UseZone } from '../core/params.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
+import { districtContaining } from './RoadDistricts.js';
 import { trimLaneEnds } from './RoadClearance.js';
 
 /**
@@ -65,6 +67,10 @@ export interface Block {
   interiorRoads: InteriorRoad[];
   area: number;
   centroid: Vec2;
+  /** The Tier-1 face this block sits in, or -1 if there are no districts. */
+  districtId: number;
+  /** 用途地域, inherited from that district. Decides how the block subdivides. */
+  zone: UseZone;
 }
 
 export interface BlockExtraction {
@@ -128,6 +134,8 @@ export function extractBlocks(
           continue;
         }
         const id = blocks.length;
+        const c = centroid(piece);
+        const district = districtContaining(net.districts, c);
         blocks.push({
           id,
           seed: `${seed}/block/${id}`,
@@ -139,7 +147,9 @@ export function extractBlocks(
           edges: attributeEdges(piece, net, split.lanes, opts.attributionTolerance),
           interiorRoads: interiorRoadsOf(piece, net, spurs.edgeIds),
           area: a,
-          centroid: centroid(piece),
+          centroid: c,
+          districtId: district?.id ?? -1,
+          zone: district?.zone ?? 'lowRise',
         });
       }
     }

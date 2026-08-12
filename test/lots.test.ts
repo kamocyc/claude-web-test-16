@@ -17,7 +17,7 @@ function buildLots(seed: string) {
   const params = cloneParams(DEFAULT_PARAMS);
   params.seed = seed;
   params.roads.extent = 190; // smaller town keeps the test fast
-  const roads = generateRoads(params.seed, params.roads);
+  const roads = generateRoads(params.seed, params.roads, params.landUse);
   const { blocks } = extractBlocks(roads, params.seed);
   const lots: Lot[] = [];
   for (const b of blocks) lots.push(...subdivideBlock(b, roads, params, lots.length));

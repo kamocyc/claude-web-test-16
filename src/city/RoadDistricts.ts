@@ -1,5 +1,5 @@
 import type { Polygon, Vec2 } from '../core/types.js';
-import { DEG, type RoadClass, type RoadParams } from '../core/params.js';
+import { DEG, type RoadClass, type RoadParams, type UseZone } from '../core/params.js';
 import { makeRng, subSeed } from '../core/rng.js';
 import * as V from '../geom/vec2.js';
 import { area, centroid, isSimple, edges as polyEdges } from '../geom/polygon.js';
@@ -42,6 +42,12 @@ export interface District {
   axis: number;
   boundary: DistrictBoundary[];
   area: number;
+  /**
+   * 用途地域. Set to `lowRise` at construction and overwritten by
+   * `city/LandUse.ts` before the Tier-2 grids are laid — the industrial zone
+   * coarsens its own street grid, so the zone has to exist before the streets do.
+   */
+  zone: UseZone;
 }
 
 /** Relative say a road has in setting the axis of the district beside it. */
@@ -168,11 +174,39 @@ export function partitionDistricts(
         axis: dominantAxis(boundary) + rng.jitter(p.districtAxisJitter * DEG),
         boundary,
         area: a,
+        zone: 'lowRise',
       });
     }
   }
 
   return { graph, districts };
+}
+
+/**
+ * Which district a block belongs to.
+ *
+ * Blocks are faces of a graph that *contains* every Tier-1 edge, so a block
+ * lies wholly inside one district by construction and its centroid decides the
+ * answer. The nearest-centroid fallback is for numerics only: cleaning and the
+ * boolean decomposition can move a centroid a few centimetres, and on a block
+ * hugging a district boundary that is enough to land outside every polygon.
+ * Returning null there would put a residential zone on an industrial block.
+ */
+export function districtContaining(districts: District[], p: Vec2): District | null {
+  const hit = districtAt(districts, p);
+  if (hit) return hit;
+
+  let best: District | null = null;
+  let bestD = Infinity;
+  for (const d of districts) {
+    const c = centroid(d.polygon);
+    const dist = V.dist(c, p);
+    if (dist < bestD) {
+      bestD = dist;
+      best = d;
+    }
+  }
+  return best;
 }
 
 /** Which district contains this point, or null. Linear; used by tests and debug. */

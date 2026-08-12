@@ -1,9 +1,9 @@
 import type { Vec2 } from '../core/types.js';
-import type { CityParams } from '../core/params.js';
+import type { CityParams, UseZone, ZoningParams } from '../core/params.js';
 import { makeFbm, makeRng, subSeed } from '../core/rng.js';
 import * as V from '../geom/vec2.js';
 import type { Block } from './Blocks.js';
-import type { Lot } from './Lots.js';
+import type { Lot, LotFrontage, LotKind } from './Lots.js';
 import { roadSamples, type RoadNetwork } from './Roads.js';
 
 /**
@@ -91,6 +91,67 @@ export function makeUrbanityField(net: RoadNetwork, params: CityParams): Urbanit
   };
 }
 
+/** What a gate gets to look at, computed once per lot. */
+export interface LotContext {
+  /** The widest frontage, whatever its class. */
+  bestFrontage: number;
+  /** Total frontage on an arterial or a collector. */
+  wideFrontage: number;
+  /** Class of the primary frontage. */
+  primaryClass: LotFrontage['cls'];
+}
+
+interface UseGate {
+  kind: LotKind;
+  test(lot: Lot, z: ZoningParams, c: LotContext): boolean;
+}
+
+/**
+ * The geometric eligibility rules, one per use.
+ *
+ * These are the *same* rules as before, only named. Zoning stays derived rather
+ * than painted: a マンション can physically go nowhere except a large parcel with
+ * wide frontage, and the subdivision only produces those along arterials — so no
+ * rule here ever has to say where one goes.
+ */
+const GATE: Record<'mansion' | 'apart' | 'house', UseGate> = {
+  mansion: {
+    kind: 'mansion',
+    test: (lot, z, c) =>
+      lot.area >= z.mansionMinArea &&
+      c.wideFrontage >= z.mansionMinFrontage &&
+      lot.urbanity > z.mansionMinUrbanity,
+  },
+  apart: {
+    kind: 'apart',
+    test: (lot, z, c) =>
+      lot.area >= z.apartMinArea &&
+      c.bestFrontage >= z.apartMinFrontage &&
+      lot.urbanity >= z.apartUrbanityLo &&
+      lot.urbanity <= z.apartUrbanityHi,
+  },
+  house: { kind: 'house', test: () => true },
+};
+
+/**
+ * Which uses each 用途地域 will consider, most demanding first.
+ *
+ * A `Record` over `UseZone` rather than a lookup with a default: a zone that
+ * nobody remembered to list is a compile error, not a district that silently
+ * comes out as detached houses.
+ *
+ * The last entry of every list must be unconditional, or a lot in that zone has
+ * no use at all.
+ */
+const ZONE_GATES: Record<UseZone, UseGate[]> = {
+  lowRise: [GATE.mansion, GATE.apart, GATE.house],
+  midRise: [GATE.mansion, GATE.apart, GATE.house],
+  neighbourCom: [GATE.mansion, GATE.apart, GATE.house],
+  commercial: [GATE.mansion, GATE.apart, GATE.house],
+  quasiIndust: [GATE.mansion, GATE.apart, GATE.house],
+  industrial: [GATE.mansion, GATE.apart, GATE.house],
+};
+
 export function assignZoning(
   lots: Lot[],
   blocks: Block[],
@@ -106,22 +167,17 @@ export function assignZoning(
     const wideFrontage = lot.frontages
       .filter((f) => f.cls === 'arterial' || f.cls === 'collector')
       .reduce((s, f) => s + f.len, 0);
+    const ctx: LotContext = {
+      bestFrontage: bestFrontage.len,
+      wideFrontage,
+      primaryClass: bestFrontage.cls,
+    };
 
-    if (
-      lot.area >= z.mansionMinArea &&
-      wideFrontage >= z.mansionMinFrontage &&
-      lot.urbanity > z.mansionMinUrbanity
-    ) {
-      lot.kind = lot.zonedKind = 'mansion';
-    } else if (
-      lot.area >= z.apartMinArea &&
-      bestFrontage.len >= z.apartMinFrontage &&
-      lot.urbanity >= z.apartUrbanityLo &&
-      lot.urbanity <= z.apartUrbanityHi
-    ) {
-      lot.kind = lot.zonedKind = 'apart';
-    } else {
-      lot.kind = lot.zonedKind = 'house';
+    lot.kind = lot.zonedKind = 'house';
+    for (const gate of ZONE_GATES[lot.useZone]) {
+      if (!gate.test(lot, z, ctx)) continue;
+      lot.kind = lot.zonedKind = gate.kind;
+      break;
     }
   }
 

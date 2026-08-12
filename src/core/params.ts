@@ -31,6 +31,54 @@ export type RoadLayout = 'district' | 'grid';
  */
 export type RoadClass = 'arterial' | 'collector' | 'local' | 'private';
 
+/**
+ * 用途地域 — the use zone a *district* is designated as.
+ *
+ * Declared here for the same reason as `RoadClass`: the mix is a setting, and
+ * `city/` already depends on `core/`. Keeping it here also lets `District`
+ * carry its own zone without `RoadDistricts` importing the assignment.
+ *
+ * The distinction this type draws is the one Japanese planning already draws,
+ * and the reason it is worth keeping in the type system: **用途地域 is the map**
+ * — decided upstream, per district, before a single lot exists — while
+ * `LotKind` is **what actually got built**, decided per lot from the geometry
+ * the map made possible. A zone never places a building. It only says which
+ * ones the geometric gates are allowed to consider.
+ */
+export type UseZone =
+  | 'lowRise' // 第一種低層住居専用地域
+  | 'midRise' // 第一種中高層住居専用地域・住居地域
+  | 'neighbourCom' // 近隣商業地域
+  | 'commercial' // 商業地域（駅前）
+  | 'quasiIndust' // 準工業地域
+  | 'industrial'; // 工業地域
+
+export interface LandUseParams {
+  /** Radius over which the station's pull on 商業地域 falls off, metres. */
+  commercialCoreRadius: number;
+  /** How far 近隣商業 may reach from the station along a wide road, metres. */
+  neighbourhoodRadius: number;
+  /** Target share of the town area given over to 工業地域, [0, 1]. */
+  industrialShare: number;
+  /** No industrial district may come closer than this to the station, metres. */
+  industrialMinStationDist: number;
+  /**
+   * Street grid spacing inside an industrial district, metres.
+   *
+   * This is why land use has to be decided *inside* road generation rather than
+   * after it. A factory parcel is 3,000–4,000 m²; the ordinary 45 m grid yields
+   * blocks of 1,500–2,000 m², so no amount of lot-parameter tuning can produce
+   * one. The zone has to reach back and coarsen the streets themselves.
+   */
+  industrialLocalSpacing: number;
+  /** Ring 準工業 around the industrial belt, so a factory never abuts 低層住専. */
+  quasiIndustrialRing: boolean;
+  /** How much Tier-1 frontage counts toward being commercial, relative to the station. */
+  arterialFrontageWeight: number;
+  noiseScale: number;
+  noiseWeight: number;
+}
+
 export interface RoadParams {
   layout: RoadLayout;
   /** Straight through-roads cutting across the grid. Used by the `grid` layout. */
@@ -290,6 +338,7 @@ export interface RenderParams {
 export interface CityParams {
   seed: string;
   roads: RoadParams;
+  landUse: LandUseParams;
   lots: LotParams;
   zoning: ZoningParams;
   buildings: BuildingParams;
@@ -330,6 +379,17 @@ export const DEFAULT_PARAMS: CityParams = {
     perimeterRoad: true,
     perimeterClass: 'local',
     promoteGridLines: false,
+  },
+  landUse: {
+    commercialCoreRadius: 180,
+    neighbourhoodRadius: 320,
+    industrialShare: 0.18,
+    industrialMinStationDist: 260,
+    industrialLocalSpacing: 95,
+    quasiIndustrialRing: true,
+    arterialFrontageWeight: 0.4,
+    noiseScale: 260,
+    noiseWeight: 0.25,
   },
   lots: {
     minLotArea: 10,

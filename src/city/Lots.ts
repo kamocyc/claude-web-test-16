@@ -1,5 +1,5 @@
 import type { Polygon, Vec2 } from '../core/types.js';
-import { DEG, type CityParams, type LotParams } from '../core/params.js';
+import { DEG, type CityParams, type LotParams, type UseZone } from '../core/params.js';
 import { makeRng, subSeed, type Rng } from '../core/rng.js';
 import * as V from '../geom/vec2.js';
 import {
@@ -15,6 +15,7 @@ import { minAreaObb } from '../geom/obb.js';
 import { differencePoly, intersectPoly, largest, multiArea, unionPoly } from '../geom/boolean.js';
 import { cleanPolygon } from '../geom/simplify.js';
 import type { Block } from './Blocks.js';
+import { zoneLotParams } from './LandUse.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
 import type { VacancyReason } from '../building/types.js';
 import { laneClears } from './RoadClearance.js';
@@ -82,6 +83,12 @@ export interface Lot {
   /** Why the lot is empty, when it is. Null on a lot that carries a building. */
   vacancyReason: VacancyReason | null;
   urbanity: number;
+  /**
+   * 用途地域, inherited from the block's district. Named `useZone` rather than
+   * `zone` because `zonedKind` already exists and means the opposite direction:
+   * this is what the map permits, that is what was decided under it.
+   */
+  useZone: UseZone;
 }
 
 interface Parcel {
@@ -119,7 +126,10 @@ export function subdivideBlock(
   params: CityParams,
   idOffset: number,
 ): Lot[] {
-  const cfg = params.lots;
+  // The block's 用途地域 reaches subdivision here and nowhere else. A factory
+  // parcel and a shophouse frontage are not reachable from one set of numbers
+  // tuned for detached houses, and this single read is the whole seam.
+  const cfg = zoneLotParams(params.lots, block.zone);
   const rng = makeRng(subSeed(block.seed, 'lots'));
 
   // --- Stage A: road right-of-way -----------------------------------------
@@ -784,6 +794,7 @@ function finaliseLots(
       zonedKind: 'house',
       vacancyReason: null,
       urbanity: 0,
+      useZone: block.zone,
     });
   }
   return lots;
