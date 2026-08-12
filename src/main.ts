@@ -133,6 +133,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __params: params,
   __materials: materials,
   __controls: controls,
+  __overlay: overlay,
   // Land use is invisible from a fixed camera position — the whole point of the
   // zoning is that different parts of the town are different — so the shot tool
   // needs to be able to ask where the shops and the factories actually are.

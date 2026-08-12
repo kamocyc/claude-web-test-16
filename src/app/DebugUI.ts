@@ -125,6 +125,14 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fZone.add(params.zoning, 'apartMinArea', 100, 400, 5).name('アパート最小面積');
   fZone.add(params.zoning, 'stationRadius', 200, 1400, 20).name('駅の影響半径');
   fZone.add(params.zoning, 'clusterCutChance', 0, 0.8, 0.02).name('分譲地の分断率');
+  fZone.add(params.landUse, 'commercialShare', 0.04, 0.4, 0.01).name('商業地の面積比');
+  fZone.add(params.zoning, 'shophouseMaxFrontage', 5, 16, 0.5).name('店舗併用住宅の最大間口');
+  fZone.add(params.zoning, 'shophouseMinUrbanity', 0, 1, 0.02).name('商店街になる都市度');
+  fZone.add(params.zoning, 'zakkyoMinUrbanity', 0, 1, 0.02).name('雑居ビル都市度');
+  fZone.add(params.zoning, 'konbiniMinFrontage', 8, 40, 1).name('コンビニ最小間口');
+  fZone.add(params.zoning, 'konbiniPerDistrict', 0, 4, 1).name('地区あたりコンビニ数');
+  fZone.add(params.zoning, 'factoryMinArea', 300, 3000, 50).name('工場の最小面積');
+  fZone.add(params.zoning, 'warehouseMinArea', 600, 4000, 50).name('倉庫の最小面積');
 
   // --- Buildings -----------------------------------------------------------
   const fBuild = gui.addFolder('建物').close();
@@ -146,6 +154,12 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fBuild.add(params.buildings, 'mirrorChance', 0, 1, 0.05).name('ミラーリング率');
   fBuild.add(params.buildings, 'orientationJitter', 0, 8, 0.1).name('向きのばらつき(度)');
   fBuild.add(params.buildings, 'bayAlignChance', 0, 1, 0.05).name('上下階の開口を揃える');
+  fBuild.add(params.buildings, 'zakkyoFar', 1, 8, 0.1).name('容積率(雑居ビル)');
+  fBuild.add(params.buildings, 'zakkyoHeightLimit', 12, 45, 1).name('絶対高さ制限(商業)');
+  fBuild.add(params.buildings, 'industrialHeightLimit', 8, 30, 0.5).name('絶対高さ制限(工業)');
+  fBuild.add(params.buildings, 'konbiniCoverage', 0.15, 0.7, 0.01).name('建ぺい率(コンビニ)');
+  fBuild.add(params.buildings, 'awningDepth', 0, 2.5, 0.1).name('庇の出');
+  fBuild.add(params.buildings, 'signBandHeight', 0, 1.6, 0.05).name('看板帯の高さ');
 
   // The single most visible setting in the generator: what the town reads as
   // from the air. Parts, not percentages — the sampler renormalises.
