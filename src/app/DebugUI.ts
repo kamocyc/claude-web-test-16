@@ -65,7 +65,7 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   // The one control this whole feature exists to expose, deliberately not
   // buried in a folder: it is what "the town grew" means from the outside.
   gui
-    .add(params.roads.growth, 'steps', 4, 60, 1)
+    .add(params.roads.growth, 'steps', 2, 40, 1)
     .name('街の年齢（成長ステップ）')
     .onFinishChange(regenerate);
   gui.add(actions, 'regenerate').name('再生成');
@@ -102,6 +102,7 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fGrowth.add(params.roads.growth, 'coreSpacing', 24, 60, 1).name('中心部の街路間隔(m)');
   fGrowth.add(params.roads.growth, 'fringeSpacing', 35, 110, 1).name('外縁部の街路間隔(m)');
   fGrowth.add(params.roads.growth, 'fringeVacancy', 0, 0.6, 0.02).name('外縁の未分譲率');
+  fGrowth.add(params.roads.growth, 'fullAt', 6, 48, 1).name('市街化が完了する年齢');
   fGrowth.add(params.roads.growth, 'spreadExponent', 0.3, 1.4, 0.02).name('広がりの速さ');
   fGrowth.add(params.roads.growth, 'streetsPerStep', 2, 20, 1).name('1段階あたりの道路数');
   fGrowth.add(params.roads.growth, 'cutFillWeight', 0, 3, 0.1).name('切土盛土を嫌う度合い');

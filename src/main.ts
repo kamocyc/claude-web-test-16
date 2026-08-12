@@ -37,6 +37,10 @@ let generateMs = 0;
 function regenerate(): void {
   loading.classList.remove('hidden');
   loading.textContent = '街を生成しています…';
+  // Cleared here, not just set at the end: the screenshot tool waits on this
+  // flag, and after the first town it is already true — so every `__setSeed` or
+  // `__setAge` shot was taken of the *previous* town.
+  (window as unknown as { __cityReady?: boolean }).__cityReady = false;
 
   // Yield a frame so the overlay actually paints before the blocking build.
   requestAnimationFrame(() => {
@@ -124,6 +128,11 @@ if (import.meta.env.DEV) {
 };
 (window as unknown as Record<string, unknown>).__setSeed = (seed: string) => {
   params.seed = seed;
+  regenerate();
+};
+/** The town's age, for the shot tool: `--age 10` beside `--seed`. */
+(window as unknown as Record<string, unknown>).__setAge = (steps: number) => {
+  params.roads.growth.steps = steps;
   regenerate();
 };
 (window as unknown as Record<string, unknown>).__setLayout = (layout: RoadLayout) => {

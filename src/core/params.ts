@@ -194,6 +194,21 @@ export interface GrowthParams {
   /** The town's age. The one control this whole feature exists to expose. */
   steps: number;
   /**
+   * The step at which the frontier reaches the edge of the town.
+   *
+   * This is what makes `steps` a *clock* rather than a second seed. The frontier
+   * schedule has to be a function of the absolute step number, not of
+   * `step / steps` — with the latter, raising the age changed the radius every
+   * step aimed at, so the candidate set differed from step one and the whole
+   * network came out unrecognisably different. An older town is supposed to be
+   * the younger one with more added to it.
+   *
+   * A town with `steps` below this is caught mid-growth: smaller, with its
+   * frontier still short of the perimeter. Above it, the extra steps go into
+   * filling in what is already there.
+   */
+  fullAt: number;
+  /**
    * How the frontier radius grows with step, as an exponent. Below 1 the town
    * spreads fast and then spends its later steps filling the core in — which is
    * what produces the density gradient the whole thing is for.
@@ -581,6 +596,7 @@ export interface CityParams {
 export const DEFAULT_GROWTH: GrowthParams = {
   enabled: true,
   steps: 24,
+  fullAt: 24,
   spreadExponent: 0.62,
   streetsPerStep: 10,
   candidatesPerStreet: 14,

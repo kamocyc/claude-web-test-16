@@ -185,13 +185,23 @@ export function extractBlocks(
         continue;
       }
 
-      // An oversized block would otherwise be dropped, leaving a conspicuous
-      // hole in the town. Run a street through it instead — which is what
-      // actually happens when a large parcel is developed.
+      // The district this face sits in decides two things, and the first of them
+      // has to be settled *before* the face is cut up.
       //
-      // The size limit is resolved before the cut, from the district the face
-      // sits in: a 工業団地 block is meant to be several times a residential one.
-      const faceZone = districtContaining(net.districts, centroid(cleaned))?.zone ?? 'lowRise';
+      // Beyond the frontier there is no estate, so there is nothing to divide.
+      // Checking after `splitOversized` is too late by then: an undeveloped face
+      // is one enormous polygon, the splitter obligingly runs lane after lane
+      // through it — thirty-two of them, up to its guard — and registers every
+      // one on the road network, so a town stopped at step 8 came out with its
+      // fields neatly gridded in 私道.
+      const faceDistrict = districtContaining(net.districts, centroid(cleaned));
+      if (faceDistrict && !faceDistrict.developed) continue;
+
+      // And the size limit: an oversized block would otherwise be dropped,
+      // leaving a conspicuous hole in the town, so a street is run through it
+      // instead — which is what actually happens when a large parcel is
+      // developed. A 工業団地 block is meant to be several times a residential one.
+      const faceZone = faceDistrict?.zone ?? 'lowRise';
       const split = splitOversized(
         cleaned,
         net,

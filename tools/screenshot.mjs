@@ -29,6 +29,7 @@ const OUT = arg('out', 'shots');
 const SEED = arg('seed', null);
 const LAYOUT = arg('layout', null);
 const ONLY = arg('only', null);
+const AGE = arg('age', null);
 const ZONES = arg('zones', null);
 const KINDS = arg('kinds', null);
 
@@ -102,6 +103,12 @@ if (LAYOUT) {
 
 // Hide the debug panel so it does not cover the view.
 await page.addStyleTag({ content: '.lil-gui{display:none!important} #hint{display:none!important}' });
+
+if (AGE) {
+  await page.evaluate((n) => window.__setAge(n), Number(AGE));
+  await page.waitForFunction(() => window.__cityReady === true);
+  await page.waitForTimeout(1500);
+}
 
 for (const [name, pos, target] of shots) {
   await page.evaluate(([p, t]) => window.__setCamera(p, t), [pos, target]);

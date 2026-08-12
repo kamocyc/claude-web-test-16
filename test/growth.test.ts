@@ -113,26 +113,46 @@ describe('a grown town', () => {
     const young = grown('grow-1', 8).city;
     const old = grown('grow-1', 20).city;
 
-    // Counted in *districts*, not in metres of road. Total length is not
-    // monotonic in the step count and should not be expected to be: a short
-    // history reaches the town edge in a handful of long steps, and a long one
-    // spends its early steps close in — the two arrive at similar mileage by
-    // different routes. What a longer history genuinely buys is a finer
-    // partition, which is the thing the density gradient is built on.
-    expect(old.roads.districts.length).toBeGreaterThanOrEqual(young.roads.districts.length);
+    // The town grows, it is not re-rolled.
+    //
+    // This is the assertion the whole `fullAt` split exists to make true. The
+    // frontier schedule used to be `(step / steps)`, so raising the age changed
+    // the radius every single step aimed at: the candidate sets differed from
+    // step one and the older town was not a continuation of the younger one but
+    // an unrecognisably different place. `steps` behaved as a second seed.
+    //
+    // Measured as the share of the young town's Tier-1 that is still there when
+    // the town is older. Not edge-for-edge: the later steps genuinely build
+    // *around* what exists, the closure pass ties off different loose ends, and
+    // the clearance pass may delete a span a newer road made redundant. But the
+    // roads themselves have to survive.
+    const tier1 = (c: typeof young) => c.roads.edges.filter((e) => e.cls !== 'local');
+    const kept = (a: typeof young, b: typeof young) => {
+      let survived = 0;
+      let total = 0;
+      for (const e of tier1(a)) {
+        const p0 = a.roads.graph.node(e.a).p;
+        const p1 = a.roads.graph.node(e.b).p;
+        const len = V.dist(p0, p1);
+        total += len;
+        const mid = V.lerp(p0, p1, 0.5);
+        const found = tier1(b).some((f) => {
+          const q0 = b.roads.graph.node(f.a).p;
+          const q1 = b.roads.graph.node(f.b).p;
+          return V.distToSegment(mid, q0, q1) < 8;
+        });
+        if (found) survived += len;
+      }
+      return survived / Math.max(1, total);
+    };
 
-    // Not asserted edge-for-edge: the later steps genuinely re-plan around what
-    // the earlier ones built, and the clearance pass may delete a span that a
-    // newer road made redundant. What must hold is that the seed cross the town
-    // started from is still there in both.
-    const near = (c: typeof young, p: { x: number; y: number }) =>
-      c.roads.edges.some((e) => {
-        const a = c.roads.graph.node(e.a).p;
-        const b = c.roads.graph.node(e.b).p;
-        return V.distToSegment(p, a, b) < 12;
-      });
-    const station = young.roads.station;
-    expect(near(young, station) && near(old, station), 'the station lost its road').toBe(true);
+    const share = kept(young, old);
+    expect(share, `only ${(share * 100).toFixed(0)}% of the young town survived into the old one`)
+      .toBeGreaterThan(0.8);
+
+    // And the older town is the bigger one: growth adds.
+    expect(old.roads.districts.length).toBeGreaterThanOrEqual(young.roads.districts.length);
+    expect(old.lots.length).toBeGreaterThan(young.lots.length);
   });
 
   it('is deterministic', () => {

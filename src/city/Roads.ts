@@ -110,6 +110,8 @@ export function generateRoads(
     raw.addSegment(tier1.node(e.a).p, tier1.node(e.b).p, e.data);
   }
   for (const d of districts) {
+    // Land the town has not reached yet gets no streets. It is still fields.
+    if (!d.developed) continue;
     for (const line of districtStreets(d, p, landUse, obstacles)) {
       for (let i = 0; i + 1 < line.pts.length; i++) {
         raw.addSegment(line.pts[i]!, line.pts[i + 1]!, {

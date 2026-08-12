@@ -17,6 +17,7 @@ import { KIND_RULES } from '../building/kinds.js';
 import { PropRegistry } from '../props/PropRegistry.js';
 import type { MaterialLibrary } from '../material/materials.js';
 import { ChunkedMeshBuilder } from './MeshMerger.js';
+import { generationAge } from '../city/RoadGrowth.js';
 
 export interface CityMeshResult {
   group: THREE.Group;
@@ -87,7 +88,7 @@ export function planBuildings(city: City, params: CityParams): BuildingPlan {
     // it as directly — lot *sizes* also grow outward, so counting parcels per
     // hectare actually reads the wrong way round without this.
     if (growth.enabled && growth.fringeVacancy > 0) {
-      const age = Math.min(1, lot.generation / Math.max(1, growth.steps - 1));
+      const age = generationAge(lot.generation, growth);
       // Its own sub-seed namespace, so changing the fringe rule cannot reshuffle
       // which roof colour every house in the town got.
       if (makeRng(subSeed(lot.seed, 'developed')).chance(growth.fringeVacancy * age)) {

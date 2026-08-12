@@ -53,6 +53,16 @@ export interface District {
    */
   generation: number;
   /**
+   * Has the town reached here yet?
+   *
+   * False for a face the frontier has not arrived at by `growth.steps`. Those
+   * are still fields: no street grid is laid inside them and no block is cut out
+   * of them, which is what actually makes the age control visible. Without it a
+   * town stopped early still developed its whole square, because the perimeter
+   * ring encloses the countryside too and a face is a face.
+   */
+  developed: boolean;
+  /**
    * 用途地域. Set to `lowRise` at construction and overwritten by
    * `city/LandUse.ts` before the Tier-2 grids are laid — the industrial zone
    * coarsens its own street grid, so the zone has to exist before the streets do.
@@ -82,7 +92,7 @@ function faceGeneration(boundary: DistrictBoundary[]): number {
 /**
  * The growth step at which the frontier would have reached a point.
  *
- * The inverse of `RoadGrowth`'s `reach = extent · (step/steps)^spreadExponent`,
+ * The inverse of `RoadGrowth.frontierReach`,
  * in Chebyshev radius because the town is a square. Zero when growth is off — a
  * town laid out all at once has no frontier and every district is generation 0.
  */
@@ -91,7 +101,7 @@ function arrivalGeneration(c: Vec2, p: RoadParams): number {
   if (!g.enabled) return 0;
   const r = Math.max(Math.abs(c.x), Math.abs(c.y)) / Math.max(1, p.extent);
   const arrived = Math.pow(Math.min(1, r), 1 / g.spreadExponent);
-  return Math.round(arrived * (g.steps - 1));
+  return Math.round(arrived * (g.fullAt - 1));
 }
 
 /**
@@ -236,6 +246,7 @@ export function partitionDistricts(
       if (a < 1) continue;
 
       const boundary = attributeBoundary(poly, graph, p, Math.max(1.0, p.nodeSnap * 0.5));
+      const gen = districtGeneration(boundary, centroid(poly), p);
       const id = districts.length;
       const rng = makeRng(subSeed(seed, 'roads', 'district', id));
       districts.push({
@@ -248,7 +259,8 @@ export function partitionDistricts(
         axis: dominantAxis(boundary) + rng.jitter(p.districtAxisJitter * DEG),
         boundary,
         area: a,
-        generation: districtGeneration(boundary, centroid(poly), p),
+        generation: gen,
+        developed: !p.growth.enabled || gen < p.growth.steps,
         zone: 'lowRise',
       });
     }

@@ -335,11 +335,33 @@ function tier1Spacing(r: number, extent: number, p: RoadParams): number {
   return p.collectorSpacing * (0.32 + 0.62 * s);
 }
 
-/** Target local-street spacing for a district enclosed at generation `gen`. */
+/**
+ * How far out the frontier has reached by the end of step `step`.
+ *
+ * Keyed on `fullAt`, never on `steps` — see `GrowthParams.fullAt`. A road built
+ * at step 5 is built at the same place whether the town stops at step 8 or
+ * runs on to 24.
+ */
+export function frontierReach(step: number, extent: number, g: GrowthParams): number {
+  const t = Math.min(1, (step + 1) / Math.max(1, g.fullAt));
+  return extent * Math.pow(t, g.spreadExponent);
+}
+
+/**
+ * Target local-street spacing for a district enclosed at generation `gen`.
+ *
+ * Also against `fullAt`: a district enclosed at step 5 was developed to the
+ * standard of step 5, and how much longer the town went on growing afterwards
+ * does not retroactively change what was built there.
+ */
 export function spacingForGeneration(gen: number, g: GrowthParams): number {
-  const t = Math.min(1, Math.max(0, gen / Math.max(1, g.steps - 1)));
+  const t = generationAge(gen, g);
   return g.coreSpacing + (g.fringeSpacing - g.coreSpacing) * (t * t * (3 - 2 * t));
 }
+
+/** How late in the town's development a generation is, in [0, 1]. */
+export const generationAge = (gen: number, g: GrowthParams): number =>
+  Math.min(1, Math.max(0, gen / Math.max(1, g.fullAt - 1)));
 
 /**
  * The station: the flattest buildable spot near the middle of the town.
@@ -502,10 +524,20 @@ function infill(
   rng: Rng,
   p: RoadParams,
   g: GrowthParams,
+  steps: number,
   terrain: Terrain,
   obstacles: ObstacleField,
 ): void {
   const E = p.extent;
+
+  // Infill stops at the frontier too.
+  //
+  // Without this the age control does nothing visible. A town stopped at step 8
+  // has grown roads over half its square; infill looks for the point furthest
+  // from any road, so it would find every empty corner of the other half, drive
+  // a collector at each, and hand back a fully built town regardless of age.
+  const built = frontierReach(steps - 1, E, g) + SEGMENT;
+
   // Coarse on purpose. This is a search for *holes*, and a hole big enough to
   // matter is a whole district — sampling it finely costs a spatial query per
   // point per round and bought nothing but sixteen seconds of generation time.
@@ -522,6 +554,7 @@ function infill(
     for (let y = -E + step / 2; y < E; y += step) {
       for (let x = -E + step / 2; x < E; x += step) {
         const q = { x, y };
+        if (townRadius(q) > built) continue;
         if (!obstacles.buildable(q) || isAbandoned(q)) continue;
         const want = tier1Spacing(townRadius(q), E, p);
         // Capped: anything past twice the wanted spacing is a hole, and how
@@ -556,7 +589,7 @@ function infill(
     // fringe. The frontier radius is `E · (step/steps)^exponent`; inverting it
     // gives the step at which growth would have arrived here anyway.
     const arrived = Math.pow(Math.min(1, townRadius(worst) / E), 1 / g.spreadExponent);
-    const gen = Math.max(1, Math.min(g.steps - 1, Math.round(arrived * (g.steps - 1))));
+    const gen = Math.max(1, Math.min(g.fullAt - 1, Math.round(arrived * (g.fullAt - 1))));
 
     let placed = 0;
     for (const cand of byDistance) {
@@ -628,7 +661,7 @@ export function growSkeleton(
   }
 
   for (let step = 1; step < g.steps; step++) {
-    const reach = E * Math.pow((step + 1) / g.steps, g.spreadExponent);
+    const reach = frontierReach(step, E, g);
 
     // What is being built this year. Arterials are rare and early, collectors
     // are the ordinary business of a growing town.
@@ -691,7 +724,7 @@ export function growSkeleton(
   // empty field in the middle of it.
   //
   // So: find the point furthest from any road, drive a road at it, repeat.
-  infill(s, rng, p, g, terrain, obstacles);
+  infill(s, rng, p, g, g.steps, terrain, obstacles);
 
   // --- Close the town ------------------------------------------------------
   closeNetwork(s, p, obstacles);
