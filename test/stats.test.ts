@@ -50,6 +50,13 @@ describe('city statistics', () => {
         spread = Math.max(spread, Math.min(d, 90 - d));
       }
     }
+    // District *size* decides whether land use can be assigned per district at
+    // all: a use zone is only as fine-grained as the faces it is painted on, and
+    // a 工業団地 has to be one or two of these to read as a district rather than
+    // a stray parcel.
+    const dAreas = city.roads.districts.map((d) => d.area).sort((a, b) => a - b);
+    const dq = (f: number) => dAreas[Math.floor(dAreas.length * f)]?.toFixed(0) ?? '-';
+
     const tier1 = city.roads.edges.filter((e) => e.cls !== 'local').length;
     const violations = clearanceViolations(city.roads, {
       clearance: params.roads.roadClearance,
@@ -62,6 +69,7 @@ describe('city statistics', () => {
         `layout:     ${layout}`,
         `roads:      ${city.roads.edges.length} edges (${tier1} tier-1), ${city.roads.privateLanes.length} private lanes`,
         `districts:  ${city.roads.districts.length}, axes ${axes.map((a) => a.toFixed(0)).join('/')} (spread ${spread.toFixed(0)}°)`,
+        `dist area:  p10=${dq(0.1)} p50=${dq(0.5)} p90=${dq(0.9)} max=${dAreas[dAreas.length - 1]?.toFixed(0)} m²`,
         `clearance:  ${violations.length} violations`,
         `blocks:     ${city.blocks.length} (rejected ${city.rejectedBlocks.length})`,
         `lots:       ${city.lots.length}  flag lots: ${flag}`,
