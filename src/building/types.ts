@@ -161,6 +161,17 @@ export interface Wall {
   /** The face carrying the exterior corridor, for apartments. */
   isCorridorSide: boolean;
   /**
+   * The one wall carrying the front door.
+   *
+   * Chosen once for the whole building rather than decided wall by wall. The
+   * façade grammar used to put an entrance on *every* wall whose outward normal
+   * came within 57° of the street, which gave 28% of the houses two or three
+   * front doors and regularly put one on a wall several metres back from the
+   * street behind the parking space — while a house whose street-facing wall was
+   * a metre and a half long got none at all.
+   */
+  isEntrance: boolean;
+  /**
    * How far anything may project from this wall before crossing the lot
    * boundary, metres. Balconies (1.0–2.1 m) and exterior corridors (1.1–1.8 m)
    * were being built at full depth against a 0.5 m side setback, so a mansion's

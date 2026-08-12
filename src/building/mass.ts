@@ -484,6 +484,10 @@ export function wallsForPolygon(footprint: Footprint, poly: Polygon): Wall[] {
       // several metres inboard — unit doors floating over the terrace with no
       // deck beneath them.
       isCorridorSide: best?.isCorridorSide === true && bestDist < 0.75,
+      // Same proximity gate, and for the same reason: a wall that stepped back
+      // from the street under a 斜線 still has the entrance wall's normal, and a
+      // front door three metres up an outside wall is worse than none.
+      isEntrance: best?.isEntrance === true && bestDist < 0.75,
     });
   }
   return out;
