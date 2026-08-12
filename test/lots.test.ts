@@ -107,6 +107,8 @@ describe('lot subdivision invariants', () => {
     }
   });
 
+  // An explicit timeout, like its neighbours: generating the land as well as the
+  // town puts this over vitest's 5 s default.
   it('lots stay inside their block', () => {
     const { blocks, lots } = buildLots('inside-1');
     const blockById = new Map(blocks.map((b) => [b.id, b]));
@@ -115,7 +117,7 @@ describe('lot subdivision invariants', () => {
       const inside = multiArea(intersectPoly([lot.polygon], [b.polygon]));
       expect(inside / area(lot.polygon), `lot ${lot.id} escapes its block`).toBeGreaterThan(0.97);
     }
-  });
+  }, 60000);
 });
 
 describe('determinism', () => {

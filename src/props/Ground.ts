@@ -8,6 +8,7 @@ import type { City } from '../city/City.js';
 import type { BuiltBuilding } from '../building/Builder.js';
 import { KIND_RULES } from '../building/kinds.js';
 import { buildTerrainMesh } from '../terrain/GroundMesh.js';
+import { gradeGround } from '../terrain/Graded.js';
 import type { Terrain } from '../terrain/Terrain.js';
 
 /**
@@ -37,7 +38,9 @@ export function buildGround(
   const heights = city.roadHeights;
 
   if (terrain.field) {
-    group.add(buildTerrainMesh(terrain, materials));
+    // The ground is drawn *after* the earthworks, not before them — see
+    // `terrain/Graded.ts`. Without this the town is buried in its own spoil.
+    group.add(buildTerrainMesh(terrain, materials, gradeGround(city) ?? undefined));
   } else {
     // Flat world: the original single plane, kept because turning terrain off
     // has to give back exactly the town this generator used to make.

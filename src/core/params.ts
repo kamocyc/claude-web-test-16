@@ -584,8 +584,8 @@ export const DEFAULT_GROWTH: GrowthParams = {
   spreadExponent: 0.62,
   streetsPerStep: 10,
   candidatesPerStreet: 14,
-  coreSpacing: 34,
-  fringeSpacing: 62,
+  coreSpacing: 40,
+  fringeSpacing: 66,
   collectorInterval: 3,
   arterialInterval: 9,
   // 道路構造令 puts a 60 km/h design speed at 5–6%. Residential streets in a
@@ -618,11 +618,11 @@ export const DEFAULT_PARAMS: CityParams = {
     maxBuildSlope: 0.8,
     river: {
       enabled: true,
-      width: 18,
+      width: 26,
       valleyWidth: 130,
       bedGrade: 0.004,
       waterDepth: 1.1,
-      bankMargin: 7,
+      bankMargin: 11,
       meander: 55,
     },
     terrace: {

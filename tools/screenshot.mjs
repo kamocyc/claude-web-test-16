@@ -146,6 +146,18 @@ for (const kind of KINDS ? KINDS.split(',') : []) {
   console.log(`wrote ${path.join(OUT, `kind-${kind}.png`)}`);
 }
 
+if (!ONLY || ONLY === 'river') {
+  const view = await page.evaluate(() => window.__riverView());
+  if (view) {
+    await page.evaluate(([p, t]) => window.__setCamera(p, t), view);
+    await page.waitForTimeout(2500);
+    await page.screenshot({ path: path.join(OUT, 'river.png') });
+    console.log(`wrote ${path.join(OUT, 'river.png')}`);
+  } else {
+    console.log('no river in this town');
+  }
+}
+
 // The 擁壁 view has to be *found* — a retaining wall is wherever the land
 // happened to fall away, which moves with the seed.
 if (!ONLY || ONLY === 'wall') {

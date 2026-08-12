@@ -113,17 +113,20 @@ function addEdge(s: GrowState, a: number, b: number, cls: RoadClass, gen: number
   s.index.add(s.pts[a]!, s.pts[b]!);
 }
 
-/** Directions of every road leaving `node`. */
-function armsAt(s: GrowState, node: number): Vec2[] {
-  const out: Vec2[] = [];
+/** Directions and classes of every road leaving `node`. */
+function armsAt(s: GrowState, node: number): { dir: Vec2; cls: RoadClass }[] {
+  const out: { dir: Vec2; cls: RoadClass }[] = [];
   for (const id of s.inc[node] ?? []) {
     const e = s.edges[id];
     if (!e || e.dead) continue;
     const other = e.a === node ? e.b : e.a;
-    out.push(V.normalize(V.sub(s.pts[other]!, s.pts[node]!)));
+    out.push({ dir: V.normalize(V.sub(s.pts[other]!, s.pts[node]!)), cls: e.cls });
   }
   return out;
 }
+
+/** Is this a road wide enough that its ribbon needs room at a junction? */
+const isWide = (c: RoadClass): boolean => c === 'arterial' || c === 'collector';
 
 /**
  * May a road leave `node` in direction `dir`?
@@ -134,9 +137,21 @@ function armsAt(s: GrowState, node: number): Vec2[] {
  * downstream stage can repair. The one-shot skeleton got this by rejection
  * sampling whole lines; growth has to get it one attachment at a time.
  */
-function attachOk(s: GrowState, node: number, dir: Vec2, minAngle: number): boolean {
+function attachOk(
+  s: GrowState,
+  node: number,
+  dir: Vec2,
+  minAngle: number,
+  cls: RoadClass = 'local',
+): boolean {
   for (const arm of armsAt(s, node)) {
-    if (V.angleBetween(arm, dir) < minAngle) return false;
+    // Two *wide* roads need a squarer junction than two narrow ones, because
+    // what has to clear is the ribbons, not the centrelines. A 13 m arterial and
+    // a 7 m collector forking at exactly `minJunctionAngle` are still 11 m apart
+    // where `clearanceViolations` measures them and it wants 12 — so the angle
+    // that is fine for two 4.8 m streets is a real overlap here.
+    const need = isWide(cls) && isWide(arm.cls) ? minAngle * 1.55 : minAngle;
+    if (V.angleBetween(arm.dir, dir) < need) return false;
   }
   return true;
 }
@@ -214,8 +229,8 @@ function joinNodes(
   const pa = s.pts[a]!;
   const pb = s.pts[b]!;
   const dir = V.normalize(V.sub(pb, pa));
-  if (!attachOk(s, a, dir, minAngle)) return false;
-  if (!attachOk(s, b, V.neg(dir), minAngle)) return false;
+  if (!attachOk(s, a, dir, minAngle, cls)) return false;
+  if (!attachOk(s, b, V.neg(dir), minAngle, cls)) return false;
   if (!crossingOk(s, pa, pb, minAngle)) return false;
   if (!obstacles.probe(pa, pb, cls).ok) return false;
   addEdge(s, a, b, cls, gen);
@@ -255,7 +270,7 @@ function closeNetwork(
       // The nearest node that is worth reaching, preferring the ones roughly
       // ahead: a dead end wants to carry on, not to double back beside itself.
       const armList = armsAt(s, node);
-      const ahead = armList.length > 0 ? V.neg(armList[0]!) : { x: 1, y: 0 };
+      const ahead = armList.length > 0 ? V.neg(armList[0]!.dir) : { x: 1, y: 0 };
       let bestTarget = -1;
       let bestScore = Infinity;
       for (let other = 0; other < s.pts.length; other++) {
@@ -399,7 +414,7 @@ function growChain(
 
       const verdict = obstacles.probe(here, to, cls);
       if (!verdict.ok) continue;
-      if (seg === 0 && !attachOk(s, at, d, minAngle)) continue;
+      if (seg === 0 && !attachOk(s, at, d, minAngle, cls)) continue;
       if (!crossingOk(s, here, to, minAngle)) continue;
 
       // --- the cost --------------------------------------------------------

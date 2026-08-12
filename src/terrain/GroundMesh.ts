@@ -3,7 +3,10 @@ import type { Vec2 } from '../core/types.js';
 import { GeometryBuffer } from '../build/GeometryBuffer.js';
 import { ChunkedMeshBuilder } from '../build/MeshMerger.js';
 import type { MaterialLibrary } from '../material/materials.js';
+import * as V from '../geom/vec2.js';
 import type { Terrain } from './Terrain.js';
+import { channelFloor } from './River.js';
+import type { GradedGround } from './Graded.js';
 
 /**
  * The land, as triangles.
@@ -43,11 +46,29 @@ function mix(
   return { r: a.r + (b.r - a.r) * k, g: a.g + (b.g - a.g) * k, b: a.b + (b.b - a.b) * k };
 }
 
-export function buildTerrainMesh(terrain: Terrain, materials: MaterialLibrary): THREE.Group {
+export function buildTerrainMesh(
+  terrain: Terrain,
+  materials: MaterialLibrary,
+  graded?: GradedGround,
+): THREE.Group {
   const group = new THREE.Group();
   group.name = 'terrain';
   const field = terrain.field;
   if (!field) return group;
+
+  /**
+   * Height of the *finished* ground: natural land, minus whatever the town dug
+   * out of it.
+   *
+   * Drawing the natural surface and then standing a town on it is wrong in one
+   * direction only, and that direction is the one you notice. A road in cut sits
+   * below the land around it; a lot levelled into a slope has half its area
+   * below the hillside it occupies. With the raw field drawn over the top, the
+   * asphalt and the lower storey of every house on a slope are simply buried —
+   * the earth that was excavated for them is still there.
+   */
+  const heightOf = (ix: number, iy: number): number =>
+    graded ? graded.at(ix, iy) : field.raw(ix, iy);
 
   const chunks = new ChunkedMeshBuilder();
 
@@ -107,10 +128,10 @@ export function buildTerrainMesh(terrain: Terrain, materials: MaterialLibrary): 
           const p10 = field.posOf(ix + 1, iy);
           const p11 = field.posOf(ix + 1, iy + 1);
           const p01 = field.posOf(ix, iy + 1);
-          const h00 = field.raw(ix, iy);
-          const h10 = field.raw(ix + 1, iy);
-          const h11 = field.raw(ix + 1, iy + 1);
-          const h01 = field.raw(ix, iy + 1);
+          const h00 = heightOf(ix, iy);
+          const h10 = heightOf(ix + 1, iy);
+          const h11 = heightOf(ix + 1, iy + 1);
+          const h01 = heightOf(ix, iy + 1);
 
           const v = (p: Vec2, h: number) => ({ x: p.x, y: h, z: p.y });
           const n00 = normalOf(ix, iy);
@@ -180,8 +201,8 @@ export function buildTerrainMesh(terrain: Terrain, materials: MaterialLibrary): 
     if (ax === bx && ay === by) continue;
     const pa = field.posOf(ax, ay);
     const pb = field.posOf(bx, by);
-    const ha = field.raw(ax, ay);
-    const hb = field.raw(bx, by);
+    const ha = heightOf(ax, ay);
+    const hb = heightOf(bx, by);
     skirt.pushQuad(
       { x: pa.x, y: ha, z: pa.y },
       { x: pb.x, y: hb, z: pb.y },
@@ -195,38 +216,137 @@ export function buildTerrainMesh(terrain: Terrain, materials: MaterialLibrary): 
     group.add(mesh);
   }
 
-  // Water. A separate flat-ish surface following the monotone level profile —
-  // the bed is already carved beneath it, so nothing else is needed to make the
-  // river sit in something.
   const river = terrain.river;
-  if (river) {
-    const water = new GeometryBuffer();
-    water.setColor({ r: 1, g: 1, b: 1 });
-    const half = river.params.width / 2;
-    for (let i = 0; i + 1 < river.centre.length; i++) {
-      const a = river.centre[i]!;
-      const b = river.centre[i + 1]!;
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const l = Math.hypot(dx, dy) || 1;
-      const nx = -dy / l;
-      const ny = dx / l;
-      const ya = river.water[i]!;
-      const yb = river.water[i + 1]!;
-      const up = { x: 0, y: 1, z: 0 };
+  if (river) buildRiver(group, terrain, materials, heightOf, field);
+
+  return group;
+}
+
+/**
+ * The river: water, its 河川敷 berm, and the 護岸 that retains the bank.
+ *
+ * A flat blue ribbon laid along a valley floor does not read as water — it reads
+ * as blue tarmac, and it did. What makes a small urban Japanese river legible is
+ * the *section*, and it has four parts, each of which is doing work here:
+ *
+ * - **A channel it sits in.** `riverCarve` gives a flat floor rather than a V,
+ *   so the waterline is horizontal across the stream instead of climbing a
+ *   slope.
+ * - **Depth.** Vertex colour darkens toward the middle. Without an environment
+ *   map — and the headless renderer has none — a single flat colour is the one
+ *   thing a still surface cannot survive.
+ * - **A dry berm.** The strip between the water and the bank, in silt rather
+ *   than grass. It is where the difference between a river and a canal lives.
+ * - **A revetment.** The concrete face holding the bank up. Every river of this
+ *   size in a Japanese town has one, and it is what the eye actually recognises.
+ */
+function buildRiver(
+  group: THREE.Group,
+  terrain: Terrain,
+  materials: MaterialLibrary,
+  heightOf: (ix: number, iy: number) => number,
+  field: NonNullable<Terrain['field']>,
+): void {
+  const river = terrain.river!;
+  const water = new GeometryBuffer();
+  const revet = new GeometryBuffer();
+  const half = river.params.width / 2;
+  const floor = channelFloor(river.params);
+  const up = { x: 0, y: 1, z: 0 };
+
+  // The green-grey of a small river running through a Japanese town, not the
+  // blue of open sea. Paler at the edges, where the bed shows through.
+  const DEEP = { r: 0.21, g: 0.31, b: 0.34 };
+  const SHALLOW = { r: 0.40, g: 0.48, b: 0.47 };
+  const CONCRETE = { r: 0.66, g: 0.65, b: 0.62 };
+
+  /** Ground height beside the channel, read off the same mesh the town stands on. */
+  const bankTop = (p: Vec2): number => {
+    const ix = Math.round((p.x - field.x0) / field.cell);
+    const iy = Math.round((p.y - field.y0) / field.cell);
+    return heightOf(ix, iy);
+  };
+
+  // The centreline runs well past the town so that after clipping it spans edge
+  // to edge; the *heightfield* stops sooner. Beyond it there is no carved
+  // channel, so a surface drawn out there is a rectangle of water lying on top
+  // of open country — which is exactly how it looked.
+  const limitX = field.x0 + (field.nx - 1) * field.cell;
+  const limitY = field.y0 + (field.ny - 1) * field.cell;
+  const inField = (p: Vec2): boolean =>
+    p.x >= field.x0 && p.x <= limitX && p.y >= field.y0 && p.y <= limitY;
+
+  for (let i = 0; i + 1 < river.centre.length; i++) {
+    const a = river.centre[i]!;
+    const b = river.centre[i + 1]!;
+    if (!inField(a) || !inField(b)) continue;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l = Math.hypot(dx, dy) || 1;
+    const n: Vec2 = { x: -dy / l, y: dx / l };
+    const ya = river.water[i]!;
+    const yb = river.water[i + 1]!;
+    const beda = river.bed[i]!;
+    const bedb = river.bed[i + 1]!;
+
+    // The surface, in three strips so the middle can be darker than the edges.
+    const bands: [number, number, { r: number; g: number; b: number }][] = [
+      [-1, -0.45, SHALLOW],
+      [-0.45, 0.45, DEEP],
+      [0.45, 1, SHALLOW],
+    ];
+    for (const [u0, u1, colour] of bands) {
+      water.setColor(colour);
+      // Outer edge first. Plan (x, y) maps to world (x, h, y), which flips
+      // handedness — running the strip from `u0` to `u1` puts its front face
+      // downward and the renderer culls it. That is why the river had no water
+      // in it at all: the surface was there the whole time, facing the riverbed.
       water.pushQuad(
-        { x: a.x - nx * half, y: ya, z: a.y - ny * half },
-        { x: b.x - nx * half, y: yb, z: b.y - ny * half },
-        { x: b.x + nx * half, y: yb, z: b.y + ny * half },
-        { x: a.x + nx * half, y: ya, z: a.y + ny * half },
+        { x: a.x + n.x * u1 * half, y: ya, z: a.y + n.y * u1 * half },
+        { x: b.x + n.x * u1 * half, y: yb, z: b.y + n.y * u1 * half },
+        { x: b.x + n.x * u0 * half, y: yb, z: b.y + n.y * u0 * half },
+        { x: a.x + n.x * u0 * half, y: ya, z: a.y + n.y * u0 * half },
         up,
       );
     }
-    const mesh = new THREE.Mesh(water.toGeometry(), materials.materials.water);
-    mesh.name = 'terrain:water';
-    mesh.receiveShadow = true;
-    group.add(mesh);
+
+    // 護岸 — at the *waterline*, and sized from the design rather than from the
+    // ground.
+    //
+    // The first version stood it at the edge of the flat floor and took its
+    // height from the terrain beside it, which is circular: the channel is flat
+    // out to there by construction, so the wall measured itself as zero high and
+    // was skipped every single span. And a floodplain river has no sharp bank to
+    // retain anyway. What every river of this size in a Japanese town actually
+    // has is a low faced wall right at the water's edge, from the bed up to a
+    // little above the surface, with the 河川敷 behind it — so that is what this
+    // is, and the terrain beyond is left to be terrain.
+    for (const side of [1, -1] as const) {
+      const p0 = V.addScaled(a, n, (half + 0.35) * side);
+      const p1 = V.addScaled(b, n, (half + 0.35) * side);
+      const q0 = V.addScaled(p0, n, 0.7 * side);
+      const q1 = V.addScaled(p1, n, 0.7 * side);
+      const base = Math.min(beda, bedb) - 0.5;
+      // Up to the berm, or just clear of the water — whichever is higher, so it
+      // still reads where the bank happens to be low.
+      const top = Math.max(ya, yb) + 0.55;
+      revet.setColor(CONCRETE);
+      revet.pushPrism([p0, p1, q1, q0], base, top, true, false);
+    }
+    void floor;
+    void bankTop;
   }
 
-  return group;
+  const surface = new THREE.Mesh(water.toGeometry(), materials.materials.water);
+  surface.name = 'terrain:water';
+  surface.receiveShadow = true;
+  group.add(surface);
+
+  if (!revet.isEmpty) {
+    const mesh = new THREE.Mesh(revet.toGeometry(), materials.materials.concrete);
+    mesh.name = 'terrain:revetment';
+    mesh.receiveShadow = true;
+    mesh.castShadow = true;
+    group.add(mesh);
+  }
 }

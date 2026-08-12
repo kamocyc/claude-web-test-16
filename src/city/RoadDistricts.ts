@@ -79,6 +79,48 @@ function faceGeneration(boundary: DistrictBoundary[]): number {
   return sawGrown ? best : 0;
 }
 
+/**
+ * The growth step at which the frontier would have reached a point.
+ *
+ * The inverse of `RoadGrowth`'s `reach = extent · (step/steps)^spreadExponent`,
+ * in Chebyshev radius because the town is a square. Zero when growth is off — a
+ * town laid out all at once has no frontier and every district is generation 0.
+ */
+function arrivalGeneration(c: Vec2, p: RoadParams): number {
+  const g = p.growth;
+  if (!g.enabled) return 0;
+  const r = Math.max(Math.abs(c.x), Math.abs(c.y)) / Math.max(1, p.extent);
+  const arrived = Math.pow(Math.min(1, r), 1 / g.spreadExponent);
+  return Math.round(arrived * (g.steps - 1));
+}
+
+/**
+ * How old a district is.
+ *
+ * The frontier radius sets the floor and most of the answer; the roads that
+ * closed the face adjust it, by a bounded amount, upward.
+ *
+ * Neither term works alone, and both failures are quiet. The boundary alone: an
+ * early arterial can run all the way to the town edge, so a fringe face bounded
+ * by it and by the perimeter dates itself to generation 2, takes the finest grid
+ * and sells every plot — while the middle of town, criss-crossed by later roads
+ * and later infill, dates late. The measured density gradient came out flat and
+ * the unsold plots sat nearer the station than the built ones. The radius alone:
+ * every district at the same distance is the same age, which throws away the
+ * one thing growth was for.
+ *
+ * So the radius says when growth could first have been here at all, and the
+ * boundary is allowed to say "and it was not developed for another few years" —
+ * up to `LATE_ALLOWANCE` of them.
+ */
+const LATE_ALLOWANCE = 6;
+
+function districtGeneration(boundary: DistrictBoundary[], c: Vec2, p: RoadParams): number {
+  const arrival = arrivalGeneration(c, p);
+  const face = faceGeneration(boundary);
+  return Math.max(arrival, Math.min(face, arrival + LATE_ALLOWANCE));
+}
+
 /** Relative say a road has in setting the axis of the district beside it. */
 const AXIS_WEIGHT: Record<RoadClass, number> = {
   arterial: 2.0,
@@ -206,7 +248,7 @@ export function partitionDistricts(
         axis: dominantAxis(boundary) + rng.jitter(p.districtAxisJitter * DEG),
         boundary,
         area: a,
-        generation: faceGeneration(boundary),
+        generation: districtGeneration(boundary, centroid(poly), p),
         zone: 'lowRise',
       });
     }

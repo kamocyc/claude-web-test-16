@@ -188,10 +188,23 @@ export function riverCarve(river: River, x: number, y: number, baseHeight: numbe
   const bed = sampleAlong(river.bed, hit);
   const depth = baseHeight - bed;
   if (depth <= 0) return 0;
-  const t = hit.d / w;
+
+  // A flat floor out to the far side of the 河川敷, then rising banks.
+  //
+  // A plain smoothstep bowl from the centreline gives a V, and a V puts the
+  // waterline on a slope: the surface reads as a painted stripe rather than as
+  // water sitting in something, and there is nowhere for the revetment to
+  // stand. A real channel is flat-bottomed — water, then a dry berm, then the
+  // bank — and that is what the ground mesh needs in order to draw one.
+  const flat = channelFloor(river.params);
+  if (hit.d <= flat) return depth;
+  const t = (hit.d - flat) / (w - flat);
   const fade = 1 - t * t * (3 - 2 * t);
   return depth * fade;
 }
+
+/** Half-width of the flat channel floor: the water plus its 河川敷 berm. */
+export const channelFloor = (p: RiverParams): number => p.width / 2 + p.bankMargin * 0.8;
 
 /** Water surface height at `p`, or null when `p` is outside the channel. */
 export function riverWaterAt(river: River, x: number, y: number): number | null {

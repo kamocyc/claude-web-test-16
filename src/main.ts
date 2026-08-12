@@ -268,6 +268,23 @@ Object.assign(window as unknown as Record<string, unknown>, {
       [f.mid.x, best.lot.platform.padY - best.drop * 0.5, f.mid.y],
     ];
   },
+  /** Standing on the bank of the river, looking along it. */
+  __riverView: (): [[number, number, number], [number, number, number]] | null => {
+    const r = city?.terrain.river;
+    if (!r || !city) return null;
+    const i = Math.floor(r.centre.length / 2);
+    const a = r.centre[i]!;
+    const b = r.centre[Math.min(r.centre.length - 1, i + 3)]!;
+    const d = V3.normalize(V3.sub(b, a));
+    const n = V3.perp(d);
+    // Well back and well up: the bank is built right to the water now, so a
+    // camera at the old 34 m stood inside somebody's second floor.
+    const eye = V3.addScaled(V3.addScaled(a, n, 70), d, -70);
+    return [
+      [eye.x, city.terrain.heightAt(eye) + 30, eye.y],
+      [b.x, r.water[i]!, b.y],
+    ];
+  },
   __zoneCentre: (zone: string): [number, number] | null => {
     const d = city?.roads.districts.find((k) => k.zone === zone);
     if (!d) return null;

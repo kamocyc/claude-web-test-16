@@ -133,13 +133,19 @@ export function createMaterials(anisotropy: number): MaterialLibrary {
     // blue tarmac — and not quite opaque, so the bed shows through at the edges
     // where it is shallow.
     water: new THREE.MeshStandardMaterial({
-      color: 0x33454a,
+      // White, because the colour is carried per vertex — see below. Tinting
+      // here as well multiplies the two and the river comes out near-black.
+      color: 0xffffff,
       roughness: 0.08,
       metalness: 0.1,
       envMapIntensity: 1.6,
       transparent: true,
-      opacity: 0.86,
-      vertexColors: false,
+      opacity: 0.88,
+      // Vertex colours *on*, unlike glass. Without an environment map — and the
+      // headless renderer has none — a single flat colour on a still horizontal
+      // surface reads as painted tarmac. The depth banding in
+      // `terrain/GroundMesh.ts` is the only thing making it look wet.
+      vertexColors: true,
     }),
     foliage: std(null, { roughness: 0.95 }),
   };
