@@ -92,6 +92,8 @@ export interface Lot {
    * this is what the map permits, that is what was decided under it.
    */
   useZone: UseZone;
+  /** Growth step of the district this lot sits in — how old the estate is. */
+  generation: number;
   /**
    * The levelled platform this lot was cut into the slope, and the walls that
    * hold it up. Non-null and flat on level ground — see `city/Platform.ts`.
@@ -812,6 +814,7 @@ function finaliseLots(
       vacancyReason: null,
       urbanity: 0,
       useZone: block.zone,
+      generation: block.generation,
       platform: FLAT_PLATFORM,
     });
   }

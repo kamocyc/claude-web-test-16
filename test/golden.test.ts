@@ -62,11 +62,15 @@ function hashBuildings(plan: ReturnType<typeof planBuildings>): number {
  * run — the assertion prints both sides — and paste the new values in.
  */
 const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }> = {
+  // Re-recorded once, deliberately: `pruneTier1Spurs` found a genuinely
+  // stranded collector on this seed that the flat generator had always left
+  // there. `test/roads.test.ts` never caught it because it checks a different
+  // seed. One lot moved as a result.
   'sakura-3/district': {
-    lots: 3729770311,
-    buildings: 896009484,
+    lots: 3493833412,
+    buildings: 1925033318,
     counts:
-      '{"house":361,"apart":131,"mansion":9,"factory":1,"shophouse":34,"vacant":5,"zakkyo":4,"konbini":2}',
+      '{"house":360,"apart":133,"mansion":9,"factory":1,"shophouse":34,"vacant":4,"zakkyo":4,"konbini":2}',
   },
   'sakura-3/grid': {
     lots: 2354422704,
@@ -79,17 +83,36 @@ const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }
     counts:
       '{"house":251,"apart":152,"mansion":13,"konbini":2,"vacant":8,"zakkyo":13,"shophouse":2}',
   },
+  'sakura-3/district/land': {
+    lots: 665927233,
+    buildings: 2118853655,
+    counts:
+      '{"house":343,"apart":101,"vacant":22,"mansion":5,"shophouse":4,"zakkyo":7,"konbini":2,"warehouse":1,"factory":3}',
+  },
+  'kaede-11/district/land': {
+    lots: 2820860226,
+    buildings: 3955422347,
+    counts:
+      '{"house":346,"vacant":45,"apart":101,"mansion":4,"warehouse":2,"factory":3,"konbini":2,"zakkyo":1}',
+  },
 };
 
 describe('golden town fingerprint', () => {
-  const cases: [string, RoadLayout][] = [
-    ['sakura-3', 'district'],
-    ['sakura-3', 'grid'],
-    ['kaede-11', 'district'],
+  // The first three are flat and un-grown, on purpose: they predate terrain and
+  // growth and they are the evidence that the plumbing those needed — lifting a
+  // building by one scalar, rebasing props, threading a `Terrain` through five
+  // signatures — did not move a single lot on the ground it used to be generated
+  // on. The last two are the town that actually ships.
+  const cases: [string, RoadLayout, boolean][] = [
+    ['sakura-3', 'district', false],
+    ['sakura-3', 'grid', false],
+    ['kaede-11', 'district', false],
+    ['sakura-3', 'district', true],
+    ['kaede-11', 'district', true],
   ];
 
-  for (const [seed, layout] of cases) {
-    it(`is unchanged for ${seed} (${layout})`, () => {
+  for (const [seed, layout, land] of cases) {
+    it(`is unchanged for ${seed} (${layout}${land ? ', grown on terrain' : ''})`, () => {
       const params = cloneParams(DEFAULT_PARAMS);
       params.seed = seed;
       applyRoadLayout(params.roads, layout);
@@ -97,16 +120,8 @@ describe('golden town fingerprint', () => {
       // enough that every code path — flag lots, private lanes, 斜線 step-backs,
       // conforming footprints — is exercised at least a few dozen times.
       params.roads.extent = 190;
-      // Flat and un-grown, deliberately.
-      //
-      // These three fingerprints predate terrain and growth, and keeping them on
-      // the old path is what makes them useful during a change this size: they
-      // are the evidence that the plumbing — lifting buildings by a scalar,
-      // rebasing props, threading a `Terrain` through five signatures — did not
-      // move a single lot on the ground it used to be generated on. The
-      // terrain-and-growth fingerprints are separate cases below.
-      params.terrain.enabled = false;
-      params.roads.growth.enabled = false;
+      params.terrain.enabled = land;
+      params.roads.growth.enabled = land;
 
       const city = generateCity(params);
       const plan = planBuildings(city, params);
@@ -119,9 +134,9 @@ describe('golden town fingerprint', () => {
         counts: JSON.stringify(counts),
       };
 
-      const key = `${seed}/${layout}`;
+      const key = `${seed}/${layout}${land ? '/land' : ''}`;
       const golden = GOLDEN[key]!;
-      if (golden.lots === 0) {
+      if (!golden || golden.lots === 0) {
         // Unrecorded — print what to paste in rather than failing cryptically.
         console.log(`  '${key}': ${JSON.stringify(actual)},`);
       }

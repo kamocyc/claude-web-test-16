@@ -37,6 +37,7 @@ export type MaterialFamily =
   | 'metal'
   | 'ground'
   | 'asphalt'
+  | 'water'
   | 'foliage';
 
 export interface MaterialLibrary {
@@ -127,6 +128,19 @@ export function createMaterials(anisotropy: number): MaterialLibrary {
     metal: std(null, { roughness: 0.42, metalness: 0.55 }),
     ground: std(tex.ground.map, { roughness: 1.0 }),
     asphalt: std(null, { roughness: 0.96 }),
+    // The river. Smooth enough to take a sky reflection — which is the only
+    // thing that makes a flat horizontal plane read as water rather than as
+    // blue tarmac — and not quite opaque, so the bed shows through at the edges
+    // where it is shallow.
+    water: new THREE.MeshStandardMaterial({
+      color: 0x33454a,
+      roughness: 0.08,
+      metalness: 0.1,
+      envMapIntensity: 1.6,
+      transparent: true,
+      opacity: 0.86,
+      vertexColors: false,
+    }),
     foliage: std(null, { roughness: 0.95 }),
   };
 

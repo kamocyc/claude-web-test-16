@@ -32,6 +32,7 @@ export interface DistrictBoundary {
   inward: Vec2;
   cls: RoadClass;
   width: number;
+  gen: number;
 }
 
 export interface District {
@@ -43,11 +44,39 @@ export interface District {
   boundary: DistrictBoundary[];
   area: number;
   /**
+   * The growth step that closed this face — how old the district is.
+   *
+   * Read as the *maximum* over the boundary: a face does not exist until its
+   * last side has been built, and the last side is the newest one. It decides
+   * how finely the district grids itself, which is the largest single lever on
+   * the town's density gradient.
+   */
+  generation: number;
+  /**
    * 用途地域. Set to `lowRise` at construction and overwritten by
    * `city/LandUse.ts` before the Tier-2 grids are laid — the industrial zone
    * coarsens its own street grid, so the zone has to exist before the streets do.
    */
   zone: UseZone;
+}
+
+/**
+ * How old a face is: the newest road that closed it.
+ *
+ * The maximum, because a face does not exist until its last side is built. The
+ * perimeter ring is excluded — it carries `UNGROWN` and was never a growth
+ * event, so counting it dated every edge-of-town district as the newest in the
+ * place and gave it the coarsest grid regardless of what had happened inside.
+ */
+function faceGeneration(boundary: DistrictBoundary[]): number {
+  let best = 0;
+  let sawGrown = false;
+  for (const e of boundary) {
+    if (e.gen < 0) continue;
+    sawGrown = true;
+    if (e.gen > best) best = e.gen;
+  }
+  return sawGrown ? best : 0;
 }
 
 /** Relative say a road has in setting the axis of the district beside it. */
@@ -101,6 +130,7 @@ function attributeBoundary(
     const mid = V.lerp(e.a, e.b, 0.5);
     let cls: RoadClass = 'local';
     let width = p.localWidth;
+    let gen = 0;
     let bestScore = Infinity;
 
     for (const ge of graph.edges) {
@@ -116,6 +146,7 @@ function attributeBoundary(
       const data = ge.data as RoadEdgeData | undefined;
       cls = data?.cls ?? 'local';
       width = data?.width ?? roadWidth(cls, p);
+      gen = data?.gen ?? 0;
     }
 
     out.push({
@@ -125,6 +156,7 @@ function attributeBoundary(
       inward: e.normal,
       cls,
       width,
+      gen,
     });
   }
   return out;
@@ -143,7 +175,7 @@ export function partitionDistricts(
 ): { graph: PlanarGraph; districts: District[] } {
   const raw = new PlanarGraph(p.nodeSnap);
   for (const line of skeleton.lines) {
-    const data = { cls: line.cls, width: roadWidth(line.cls, p) } satisfies RoadEdgeData;
+    const data = { cls: line.cls, width: roadWidth(line.cls, p), gen: line.gen } satisfies RoadEdgeData;
     for (let i = 0; i + 1 < line.pts.length; i++) {
       raw.addSegment(line.pts[i]!, line.pts[i + 1]!, data);
     }
@@ -174,6 +206,7 @@ export function partitionDistricts(
         axis: dominantAxis(boundary) + rng.jitter(p.districtAxisJitter * DEG),
         boundary,
         area: a,
+        generation: faceGeneration(boundary),
         zone: 'lowRise',
       });
     }

@@ -167,7 +167,16 @@ export interface TerrainParams {
    * random lumps rather than as a landform that water could drain off.
    */
   tiltGrade: number;
-  /** Ground steeper than this (as a tangent) carries no building. */
+  /**
+   * Ground steeper than this (as a tangent) carries no building.
+   *
+   * Generous on purpose — 0.8 is nearly 39°. A Japanese hill suburb is built on
+   * ground far steeper than anything you could stand a house on unaided, and the
+   * whole 造成 machinery in `city/Platform.ts` exists to make that work: the lot
+   * is cut to a level pad and the 擁壁 holds the difference. Setting this to
+   * something a *natural* slope could carry throws away most of the hillside and
+   * leaves the walls with nothing to retain.
+   */
   maxBuildSlope: number;
   river: RiverParams;
   terrace: TerraceParams;
@@ -573,7 +582,7 @@ export const DEFAULT_GROWTH: GrowthParams = {
   enabled: true,
   steps: 24,
   spreadExponent: 0.62,
-  streetsPerStep: 6,
+  streetsPerStep: 10,
   candidatesPerStreet: 14,
   coreSpacing: 34,
   fringeSpacing: 62,
@@ -606,7 +615,7 @@ export const DEFAULT_PARAMS: CityParams = {
     hillScale: 260,
     hillOctaves: 4,
     tiltGrade: 0.012,
-    maxBuildSlope: 0.35,
+    maxBuildSlope: 0.8,
     river: {
       enabled: true,
       width: 18,
@@ -664,7 +673,7 @@ export const DEFAULT_PARAMS: CityParams = {
     neighbourhoodRadius: 320,
     commercialShare: 0.16,
     industrialShare: 0.18,
-    industrialMinStationDist: 260,
+    industrialMinStationDist: 245,
     industrialLocalSpacing: 95,
     quasiIndustrialRing: true,
     arterialFrontageWeight: 0.4,

@@ -104,6 +104,23 @@ const scratchScale = new THREE.Vector3();
 
 export class PropRegistry {
   private instances = new Map<PropType, PropInstance[]>();
+  private baseY = 0;
+
+  /**
+   * Run `fn` with every prop it adds raised by `y`.
+   *
+   * Mirrors `GeometryBuffer.withShade`, and exists for the same reason: the
+   * emitters — fences, gates, planting, parked cars, shop signs, yard clutter —
+   * all reason in lot-local terms and none of them should have to know the lot
+   * has been cut into a hillside. Three lines here instead of an argument
+   * through nine hundred lines of prop code.
+   */
+  withBase(y: number, fn: () => void): void {
+    const prev = this.baseY;
+    this.baseY = y;
+    fn();
+    this.baseY = prev;
+  }
 
   /**
    * Add a box-like prop in plan coordinates. `dir` is the in-plane facing;
@@ -118,7 +135,7 @@ export class PropRegistry {
     color: { r: number; g: number; b: number },
   ): void {
     const m = new THREE.Matrix4();
-    scratchPos.set(at.x, y, at.y);
+    scratchPos.set(at.x, y + this.baseY, at.y);
     // The unit box's local +Z is the `d` axis and must end up along `dir`.
     // Rotating by `a` about +Y sends local +Z to (sin a, 0, cos a), and plan
     // `dir` maps to world (dir.x, 0, dir.y) — so a = atan2(dir.x, dir.y).

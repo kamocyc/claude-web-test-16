@@ -39,6 +39,11 @@ const VIEWS = [
   ['street-house', [18, 6.5, 26], [-14, 3, -6]],
   ['street-close', [-52, 4.2, 8], [-30, 3.2, 22]],
   ['rooftops', [60, 34, 60], [0, 6, 0]],
+  // Terrain. A town on a hillside cannot be judged from inside it: the whole
+  // point is the shape of the land under it, and every fixed street-level
+  // camera above is aimed at a building.
+  ['land', [0, 620, 30], [0, 0, 0]],
+  ['land-low', [420, 130, 470], [-40, 0, -40]],
 ];
 
 const shots = ONLY ? VIEWS.filter(([n]) => n === ONLY) : VIEWS;

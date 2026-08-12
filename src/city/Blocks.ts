@@ -72,6 +72,8 @@ export interface Block {
   districtId: number;
   /** 用途地域, inherited from that district. Decides how the block subdivides. */
   zone: UseZone;
+  /** Growth step the district was enclosed at. 0 in a town built all at once. */
+  generation: number;
 }
 
 export interface BlockExtraction {
@@ -173,6 +175,7 @@ export function extractBlocks(
           centroid: c,
           districtId: district?.id ?? -1,
           zone: district?.zone ?? 'lowRise',
+          generation: district?.generation ?? 0,
         });
       }
     }

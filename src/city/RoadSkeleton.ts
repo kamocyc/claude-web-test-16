@@ -24,6 +24,12 @@ import type { ObstacleField } from '../terrain/Obstacles.js';
 export interface SkeletonLine {
   pts: Vec2[];
   cls: RoadClass;
+  /**
+   * Which growth step laid this road. Always 0 from the one-shot generator
+   * below — a planned 区画整理 town has no history, which is exactly what makes
+   * it a planned town.
+   */
+  gen: number;
 }
 
 export interface Skeleton {
@@ -193,7 +199,7 @@ export function generateSkeleton(
       { x: -E, y: E },
     ];
     for (let i = 0; i < 4; i++) {
-      lines.push({ pts: [c[i]!, c[(i + 1) % 4]!], cls: p.perimeterClass });
+      lines.push({ pts: [c[i]!, c[(i + 1) % 4]!], cls: p.perimeterClass, gen: 0 });
     }
   }
 
@@ -202,7 +208,7 @@ export function generateSkeleton(
     for (let k = 0; k < tries; k++) {
       const candidate = make(rng);
       if (!acceptable(candidate, lines, p)) continue;
-      lines.push({ pts: candidate, cls });
+      lines.push({ pts: candidate, cls, gen: 0 });
       return candidate;
     }
     return null;
@@ -265,7 +271,7 @@ export function generateSkeleton(
   for (const line of lines) {
     const isPerimeter = line.pts.length === 2 && line.pts.every((q) => Math.abs(Math.abs(q.x) - E) < 1e-6 || Math.abs(Math.abs(q.y) - E) < 1e-6);
     for (const run of clipToSquare(line.pts, isPerimeter ? E : E + PERIMETER_OVERSHOOT)) {
-      if (run.length > 1) clipped.push({ pts: run, cls: line.cls });
+      if (run.length > 1) clipped.push({ pts: run, cls: line.cls, gen: line.gen });
     }
   }
 

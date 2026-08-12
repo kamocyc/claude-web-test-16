@@ -24,8 +24,19 @@ export class ChunkedMeshBuilder {
     return `${Math.floor(p.x / CHUNK_SIZE)},${Math.floor(p.y / CHUNK_SIZE)}`;
   }
 
-  /** Add one object's buffers, binned by a representative position. */
-  add(at: Vec2, buffers: Partial<Record<MaterialFamily, GeometryBuffer>>): void {
+  /**
+   * Add one object's buffers, binned by a representative position and raised by
+   * `y`.
+   *
+   * That one number is how the whole town gets onto a hillside. A 雛壇造成
+   * platform *is* a level surface, so a building on a slope is the same
+   * building the flat generator already makes, standing `padY` higher — and
+   * `GeometryBuffer.append` has taken an offset since the day it was written.
+   * The alternative was threading a height through `Builder`, `footprint`,
+   * `mass`, `roof` and `facade`, which is three and a half thousand lines of the
+   * most delicate code here, to say something none of it needs to know.
+   */
+  add(at: Vec2, buffers: Partial<Record<MaterialFamily, GeometryBuffer>>, y = 0): void {
     const key = this.keyOf(at);
     let chunk = this.chunks.get(key);
     if (!chunk) this.chunks.set(key, (chunk = {}));
@@ -33,7 +44,7 @@ export class ChunkedMeshBuilder {
       if (!buf || buf.isEmpty) continue;
       let target = chunk[family];
       if (!target) chunk[family] = target = new GeometryBuffer();
-      target.append(buf);
+      target.append(buf, 0, y, 0);
     }
   }
 

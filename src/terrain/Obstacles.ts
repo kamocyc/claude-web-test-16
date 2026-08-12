@@ -155,7 +155,24 @@ export function makeObstacles(terrain: Terrain, g: GrowthParams): ObstacleField 
     maxGradient: g.maxGradient,
 
     probe(a, b, cls) {
-      if (gradient(a, b).max > g.maxGradient[cls]) return { ok: false, reason: 'gradient' };
+      // End to end, not the worst 5 m of ground along the way.
+      //
+      // A road is a *graded* surface: it cuts the hump and fills the dip, and
+      // `city/RoadProfile.ts` then solves it to a smooth profile within this
+      // same limit. Testing the raw ground's local maximum asks the land to
+      // already be a road, and on 26 m of relief essentially nothing passes —
+      // the first version of this rejected all but a handful of arterial
+      // candidates in the whole town, and the generator produced two districts
+      // covering ninety per cent of it.
+      //
+      // What the local maximum *is* good for is cost, and it is used that way
+      // by the growth scorer: a line that needs a big cutting is expensive, but
+      // it is not impossible.
+      const len = V.dist(a, b);
+      const report = gradient(a, b);
+      if (len > 1e-6 && Math.abs(report.rise) / len > g.maxGradient[cls]) {
+        return { ok: false, reason: 'gradient' };
+      }
 
       const water = waterCrossing(a, b);
       if (!water) return { ok: true, bridge: null };

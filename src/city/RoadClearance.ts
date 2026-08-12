@@ -518,12 +518,60 @@ function rebuild(graph: PlanarGraph, edges: RoadEdge[], snap: number): PlanarGra
     out.addSegment(graph.node(e.a).p, graph.node(e.b).p, {
       cls: e.cls,
       width: e.width,
+      gen: e.gen,
     } satisfies RoadEdgeData);
   }
   return out;
 }
 
 /** Re-derive the `RoadEdge` list from a graph's edge payloads. */
+/**
+ * Delete Tier-1 roads that end in nothing.
+ *
+ * The distinction this draws is the whole reason it exists: a local street that
+ * stops dead is a 行き止まり, which this town is meant to be full of, while an
+ * arterial that stops dead is a defect. `extractFaces` prunes dead-end chains
+ * before walking, so a stranded collector does not merely look odd — the two
+ * districts it was supposed to separate merge into one and a single grid
+ * direction governs twice the town it should.
+ *
+ * Runs last, after `enforceClearance`, because clearance is itself a way to
+ * produce one: deleting the span that a collector hung off strands the collector.
+ * Iterated to a fixpoint, since cutting a chain's last edge strands the one
+ * behind it. It cannot disconnect the network — everything it removes is by
+ * definition a dead end.
+ */
+export function pruneTier1Spurs(graph: PlanarGraph, p: RoadParams): PlanarGraph {
+  const drop = new Set<number>();
+  for (;;) {
+    const degree = new Map<number, number>();
+    for (const e of graph.edges) {
+      if (drop.has(e.id)) continue;
+      degree.set(e.a, (degree.get(e.a) ?? 0) + 1);
+      degree.set(e.b, (degree.get(e.b) ?? 0) + 1);
+    }
+    let cut = 0;
+    for (const e of graph.edges) {
+      if (drop.has(e.id)) continue;
+      const data = e.data as RoadEdgeData | undefined;
+      const cls = data?.cls ?? 'local';
+      if (cls === 'local' || cls === 'private') continue;
+      if ((degree.get(e.a) ?? 0) > 1 && (degree.get(e.b) ?? 0) > 1) continue;
+      drop.add(e.id);
+      cut++;
+    }
+    if (cut === 0) break;
+  }
+  if (drop.size === 0) return graph;
+
+  const out = new PlanarGraph(p.nodeSnap * 0.4);
+  for (const e of graph.edges) {
+    if (drop.has(e.id)) continue;
+    out.addSegment(graph.node(e.a).p, graph.node(e.b).p, e.data);
+  }
+  return out;
+}
+
 export function readEdges(graph: PlanarGraph, p: RoadParams): RoadEdge[] {
   return graph.edges.map((e) => {
     const data = e.data as RoadEdgeData | undefined;
@@ -533,6 +581,7 @@ export function readEdges(graph: PlanarGraph, p: RoadParams): RoadEdge[] {
       b: e.b,
       cls: data?.cls ?? 'local',
       width: data?.width ?? p.localWidth,
+      gen: data?.gen ?? 0,
     };
   });
 }
