@@ -8,11 +8,20 @@ import {
 import { generateRoads, type RoadNetwork } from './Roads.js';
 import { subdivideBlock, type Lot } from './Lots.js';
 import { assignZoning, makeUrbanityField, type UrbanityField } from './Zoning.js';
+import { makeTerrain, type Terrain } from '../terrain/Terrain.js';
+import { makeObstacles, type ObstacleField } from '../terrain/Obstacles.js';
+import { solveRoadProfile, type RoadHeights } from './RoadProfile.js';
+import { assignPlatforms } from './Platform.js';
 
 /** The generated city, before any geometry exists. */
 export interface City {
   params: CityParams;
+  /** The land. `FLAT_TERRAIN` when terrain is off — never null. */
+  terrain: Terrain;
+  obstacles: ObstacleField;
   roads: RoadNetwork;
+  /** Design height of every road node. Zero everywhere on flat ground. */
+  roadHeights: RoadHeights;
   blocks: Block[];
   lots: Lot[];
   urbanity: UrbanityField;
@@ -30,11 +39,26 @@ export function generateCity(params: CityParams): City {
     return r;
   };
 
-  const roads = clock('roads', () => generateRoads(params.seed, params.roads, params.landUse));
+  // The land comes first. Roads are routed around it, blocks are cut out of it,
+  // and lots are levelled into it — so nothing downstream can be built until it
+  // exists. When terrain is off this is `FLAT_TERRAIN` and every query answers
+  // zero, which is exactly the town this generator used to make.
+  const terrain = clock('terrain', () => makeTerrain(params.seed, params.terrain, params.roads.extent));
+  const obstacles = clock('obstacles', () => makeObstacles(terrain, params.roads.growth));
+
+  const roads = clock('roads', () =>
+    generateRoads(params.seed, params.roads, params.landUse, terrain, obstacles),
+  );
+  // Road heights are solved before the blocks are cut, because a lot's platform
+  // is levelled to the height of the street it fronts, not to the ground it
+  // stands on.
+  const roadHeights = clock('profile', () => solveRoadProfile(roads, terrain, params.roads));
+
   const extraction = clock('blocks', () =>
     extractBlocks(roads, params.seed, {
       ...DEFAULT_BLOCK_OPTIONS,
       laneClearance: params.roads.roadClearance,
+      obstacles,
     }),
   );
   const urbanity = clock('urbanity', () => makeUrbanityField(roads, params));
@@ -42,16 +66,20 @@ export function generateCity(params: CityParams): City {
   const lots = clock('lots', () => {
     const out: Lot[] = [];
     for (const block of extraction.blocks) {
-      out.push(...subdivideBlock(block, roads, params, out.length));
+      out.push(...subdivideBlock(block, roads, params, out.length, obstacles));
     }
     return out;
   });
 
   clock('zoning', () => assignZoning(lots, extraction.blocks, urbanity, params));
+  clock('platforms', () => assignPlatforms(lots, roads, terrain, roadHeights, params.platform));
 
   return {
     params,
+    terrain,
+    obstacles,
     roads,
+    roadHeights,
     blocks: extraction.blocks,
     lots,
     urbanity,

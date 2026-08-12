@@ -6,7 +6,7 @@ import {
   type CityParams,
   type RoadLayout,
 } from '../src/core/params.js';
-import { generateRoads } from '../src/city/Roads.js';
+import { roadsFor } from './helpers.js';
 import { generateCity } from '../src/city/City.js';
 import { clearanceViolations, describeViolation } from '../src/city/RoadClearance.js';
 import * as V from '../src/geom/vec2.js';
@@ -38,7 +38,7 @@ describe('road clearance', () => {
     for (const seed of SEEDS) {
       it(`ribbons never overlap (${layout}, ${seed})`, () => {
         const params = roadParams(seed, layout);
-        const net = generateRoads(params.seed, params.roads, params.landUse);
+        const net = roadsFor(params);
         const bad = clearanceViolations(net, { clearance: params.roads.roadClearance });
         expect(
           bad.slice(0, 5).map((v) => describeViolation(net, v)),
@@ -66,7 +66,7 @@ describe('junction angles', () => {
   for (const layout of LAYOUTS) {
     it(`no acute junctions (${layout})`, () => {
       const params = roadParams('junc-1', layout);
-      const net = generateRoads(params.seed, params.roads, params.landUse);
+      const net = roadsFor(params);
       const limit = params.roads.minJunctionAngle * (Math.PI / 180);
 
       const incident: Vec2Dir[][] = net.graph.nodes.map(() => []);
@@ -148,7 +148,7 @@ describe('tier-1 skeleton', () => {
   for (const layout of LAYOUTS) {
     it(`arterials and collectors span the town (${layout})`, () => {
       const params = roadParams('spur-1', layout);
-      const net = generateRoads(params.seed, params.roads, params.landUse);
+      const net = roadsFor(params);
       const spurs = findSpurs(net.graph).edgeIds;
       // A Tier-1 road that stops short becomes a dead-end chain, is pruned from
       // the face walk, and its district silently merges with its neighbour —

@@ -2,6 +2,8 @@ import type { Vec2 } from '../core/types.js';
 import { DEG, type RoadClass, type RoadParams } from '../core/params.js';
 import { makeRng, subSeed, type Rng } from '../core/rng.js';
 import * as V from '../geom/vec2.js';
+import type { Terrain } from '../terrain/Terrain.js';
+import type { ObstacleField } from '../terrain/Obstacles.js';
 
 /**
  * Tier-1: the roads that decide the shape of the town.
@@ -166,7 +168,14 @@ function acceptable(line: Vec2[], placed: SkeletonLine[], p: RoadParams): boolea
 /** How far a Tier-1 road runs past the perimeter so their crossing is real. */
 export const PERIMETER_OVERSHOOT = 4;
 
-export function generateSkeleton(seed: string, p: RoadParams): Skeleton {
+export function generateSkeleton(
+  seed: string,
+  p: RoadParams,
+  terrain: Terrain,
+  obstacles: ObstacleField,
+): Skeleton {
+  void terrain;
+  void obstacles;
   const rng = makeRng(subSeed(seed, 'roads', 'skeleton'));
   const E = p.extent;
   const reach = E * 1.6;

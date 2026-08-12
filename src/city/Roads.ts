@@ -7,6 +7,8 @@ import { partitionDistricts, type District } from './RoadDistricts.js';
 import { assignLandUse } from './LandUse.js';
 import { districtStreets } from './RoadGrid.js';
 import { enforceClearance, pruneShortStubs, readEdges } from './RoadClearance.js';
+import type { Terrain } from '../terrain/Terrain.js';
+import type { ObstacleField } from '../terrain/Obstacles.js';
 
 export type { RoadClass } from '../core/params.js';
 
@@ -74,11 +76,17 @@ export function roadWidth(cls: RoadClass, p: RoadParams): number {
   }
 }
 
-export function generateRoads(seed: string, p: RoadParams, landUse: LandUseParams): RoadNetwork {
+export function generateRoads(
+  seed: string,
+  p: RoadParams,
+  landUse: LandUseParams,
+  terrain: Terrain,
+  obstacles: ObstacleField,
+): RoadNetwork {
   const E = p.extent;
 
   // --- 1. Tier-1, and the districts it cuts the town into ------------------
-  const skeleton = generateSkeleton(seed, p);
+  const skeleton = generateSkeleton(seed, p, terrain, obstacles);
   const { graph: tier1, districts } = partitionDistricts(seed, skeleton, p);
 
   // --- 1b. 用途地域 --------------------------------------------------------

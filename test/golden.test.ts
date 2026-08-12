@@ -97,6 +97,16 @@ describe('golden town fingerprint', () => {
       // enough that every code path — flag lots, private lanes, 斜線 step-backs,
       // conforming footprints — is exercised at least a few dozen times.
       params.roads.extent = 190;
+      // Flat and un-grown, deliberately.
+      //
+      // These three fingerprints predate terrain and growth, and keeping them on
+      // the old path is what makes them useful during a change this size: they
+      // are the evidence that the plumbing — lifting buildings by a scalar,
+      // rebasing props, threading a `Terrain` through five signatures — did not
+      // move a single lot on the ground it used to be generated on. The
+      // terrain-and-growth fingerprints are separate cases below.
+      params.terrain.enabled = false;
+      params.roads.growth.enabled = false;
 
       const city = generateCity(params);
       const plan = planBuildings(city, params);

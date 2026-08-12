@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PARAMS, applyRoadLayout, cloneParams, type RoadLayout, type UseZone } from '../src/core/params.js';
-import { generateRoads } from '../src/city/Roads.js';
+import { roadsFor } from './helpers.js';
 import { generateCity } from '../src/city/City.js';
 import { planBuildings } from '../src/build/CityMesh.js';
 import { districtAdjacency } from '../src/city/LandUse.js';
@@ -22,7 +22,7 @@ function town(seed: string, layout: RoadLayout) {
   const params = cloneParams(DEFAULT_PARAMS);
   params.seed = seed;
   applyRoadLayout(params.roads, layout);
-  const net = generateRoads(params.seed, params.roads, params.landUse);
+  const net = roadsFor(params);
   return { params, net, adj: districtAdjacency(net.districts) };
 }
 

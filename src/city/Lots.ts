@@ -14,6 +14,8 @@ import { clipHalfPlane, splitPolygonByLine, type HalfPlane } from '../geom/halfp
 import { minAreaObb } from '../geom/obb.js';
 import { differencePoly, intersectPoly, largest, multiArea, unionPoly } from '../geom/boolean.js';
 import { cleanPolygon } from '../geom/simplify.js';
+import type { ObstacleField } from '../terrain/Obstacles.js';
+import { FLAT_PLATFORM, type LotPlatform } from './Platform.js';
 import type { Block } from './Blocks.js';
 import { zoneLotParams } from './LandUse.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
@@ -90,6 +92,11 @@ export interface Lot {
    * this is what the map permits, that is what was decided under it.
    */
   useZone: UseZone;
+  /**
+   * The levelled platform this lot was cut into the slope, and the walls that
+   * hold it up. Non-null and flat on level ground — see `city/Platform.ts`.
+   */
+  platform: LotPlatform;
 }
 
 interface Parcel {
@@ -126,6 +133,7 @@ export function subdivideBlock(
   net: RoadNetwork,
   params: CityParams,
   idOffset: number,
+  obstacles?: ObstacleField,
 ): Lot[] {
   // The block's 用途地域 reaches subdivision here and nowhere else. A factory
   // parcel and a shophouse frontage are not reachable from one set of numbers
@@ -218,7 +226,7 @@ export function subdivideBlock(
     if (own.length === 0) continue;
     parcels.push(...subdivideInterior(inner, own, cfg, rng, net, 0));
   }
-  return finaliseLots(parcels, block, fronts, cfg, idOffset, net);
+  return finaliseLots(parcels, block, fronts, cfg, idOffset, net, obstacles);
 }
 
 /**
@@ -721,6 +729,7 @@ function finaliseLots(
   cfg: LotParams,
   idOffset: number,
   net: RoadNetwork,
+  obstacles: ObstacleField | undefined,
 ): Lot[] {
   const kept: { parcel: Parcel; frontages: LotFrontage[] }[] = [];
 
@@ -746,6 +755,13 @@ function finaliseLots(
     if (a < cfg.minLotArea) return;
     // Unbuildable slivers: long and thin, nothing fits.
     if (maxInscribedCircle(cleaned, 0.4).radius < cfg.minInscribedRadius) return;
+
+    // Land the river or a scarp has already claimed. The blocks were carved
+    // around the water upstream of here, but `geom/boolean.ts` drops holes, so a
+    // bend of the river that closes inside a single block survives the carve
+    // untouched. Without this gate that bend gets a row of houses in it, and the
+    // failure is spectacular rather than subtle.
+    if (obstacles && !obstacles.buildable(centroid(cleaned))) return;
 
     // The block's street refs plus whatever the parcel itself fronts (a private
     // lane, typically) — see the note on `Parcel.fronts`.
@@ -796,6 +812,7 @@ function finaliseLots(
       vacancyReason: null,
       urbanity: 0,
       useZone: block.zone,
+      platform: FLAT_PLATFORM,
     });
   }
   return lots;

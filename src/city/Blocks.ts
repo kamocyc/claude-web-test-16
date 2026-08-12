@@ -14,6 +14,7 @@ import { extractFaces, findSpurs } from '../geom/planarGraph.js';
 import { minAreaObb } from '../geom/obb.js';
 import { clipHalfPlane, splitPolygonByLine } from '../geom/halfplane.js';
 import type { UseZone } from '../core/params.js';
+import type { ObstacleField } from '../terrain/Obstacles.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
 import { districtContaining } from './RoadDistricts.js';
 import { trimLaneEnds } from './RoadClearance.js';
@@ -98,6 +99,8 @@ export interface BlockOptions {
   attributionTolerance: number;
   /** Gap a lane cut through an oversized block must keep from the roads around it. */
   laneClearance: number;
+  /** Water and scarps to carve out of the blocks. Absent on flat ground. */
+  obstacles?: ObstacleField;
 }
 
 export const DEFAULT_BLOCK_OPTIONS: BlockOptions = {
