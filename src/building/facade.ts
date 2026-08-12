@@ -284,13 +284,28 @@ const zakkyoWallLayout: WallLayout = (ctx) => {
   return { fillWindows: false };
 };
 
+/**
+ * コンビニ — glass on the two sides that face the car park, blank behind.
+ *
+ * A convenience store is a single room with two glazed elevations and two solid
+ * ones, and the solid pair is where the chillers stand. Getting that asymmetry
+ * right matters more than any detail on the glazed side: a box glazed all round
+ * reads as a bus shelter.
+ */
+const konbiniWallLayout: WallLayout = (ctx) => {
+  const { wall, slots, place } = ctx;
+  const glazed = wall.role === 'front' || wall.isEntrance;
+  for (let i = 0; i < slots; i++) place(i, 1, glazed ? 'shopfront' : 'blankPanel');
+  return { fillWindows: false };
+};
+
 const LAYOUTS: Record<BuildingKind, WallLayout> = {
   house: houseWallLayout,
   apart: unitWallLayout,
   mansion: unitWallLayout,
   shophouse: shophouseWallLayout,
   zakkyo: zakkyoWallLayout,
-  konbini: houseWallLayout,
+  konbini: konbiniWallLayout,
   factory: houseWallLayout,
   warehouse: houseWallLayout,
 };

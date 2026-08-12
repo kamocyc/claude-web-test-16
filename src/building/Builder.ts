@@ -204,6 +204,21 @@ export function buildBuilding(
     );
   }
 
+  if (spec.roofPlant === 'condensers') {
+    // Not a 塔屋. A single-storey shop has no lift and no water tank, and giving
+    // it either is the sort of detail that reads as wrong without the viewer
+    // being able to name it. What it does have is two or three condensers in a
+    // row behind the parapet.
+    metalBuf.setColor({ r: 0.72, g: 0.73, b: 0.73 });
+    const c = tall.polygon.reduce((s2, p) => ({ x: s2.x + p.x / tall.polygon.length, y: s2.y + p.y / tall.polygon.length }), { x: 0, y: 0 });
+    const dir = mass.floors[0]!.walls[0]?.dir ?? { x: 1, y: 0 };
+    const n = 2 + rng.int(2);
+    for (let i = 0; i < n; i++) {
+      const p = V.addScaled(c, dir, (i - (n - 1) / 2) * 1.5);
+      metalBuf.pushOrientedBox(p.x, p.y, dir, 0.9, 1.2, tall.y1 + 0.15, tall.y1 + 1.05);
+    }
+  }
+
   if (spec.roofPlant === 'penthouse') {
     buildRooftopPlant(
       { wall: concreteBuf, metal: metalBuf },

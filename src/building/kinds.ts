@@ -97,6 +97,19 @@ export interface KindRule {
   entranceOnCorridor: boolean;
   /** Whole-lot hardstanding — a forecourt or a yard — rather than a garden. */
   pavedLot: boolean;
+  /**
+   * May the outline follow the lot boundary on an irregular parcel?
+   *
+   * Yes for anything domestic: a 変形地 house really is designed around its
+   * boundaries, and that route is what lets a wedge parcel be built on at all.
+   * No for a shed or a shop. Those are catalogue rectangles that get put down in
+   * the middle of whatever they are given, and forcing one to conform produces
+   * something absurd — a コンビニ on a triangular corner came out as a 25 m × 3 m
+   * ribbon along the frontage, because the only way to shrink a wedge to its
+   * coverage limit while keeping the street wall is to push the back wall in
+   * until the building is a corridor.
+   */
+  conform: boolean;
 }
 
 const RESIDENTIAL = { front: 1, side: 1, rear: 1 };
@@ -122,6 +135,7 @@ export const KIND_RULES: Record<BuildingKind, KindRule> = {
     plantingBudget: [3, 4],
     entranceOnCorridor: false,
     pavedLot: false,
+    conform: true,
   },
   apart: {
     group: 'residential',
@@ -143,6 +157,7 @@ export const KIND_RULES: Record<BuildingKind, KindRule> = {
     plantingBudget: [2, 3],
     entranceOnCorridor: true,
     pavedLot: false,
+    conform: true,
   },
   mansion: {
     group: 'residential',
@@ -164,6 +179,7 @@ export const KIND_RULES: Record<BuildingKind, KindRule> = {
     plantingBudget: [2, 3],
     entranceOnCorridor: false,
     pavedLot: false,
+    conform: true,
   },
 
   // --- Commercial -----------------------------------------------------------
@@ -191,6 +207,7 @@ export const KIND_RULES: Record<BuildingKind, KindRule> = {
     plantingBudget: [0, 2],
     entranceOnCorridor: false,
     pavedLot: false,
+    conform: true,
   },
   zakkyo: {
     group: 'commercial',
@@ -212,6 +229,7 @@ export const KIND_RULES: Record<BuildingKind, KindRule> = {
     plantingBudget: [0, 1],
     entranceOnCorridor: false,
     pavedLot: true,
+    conform: false,
   },
   konbini: {
     group: 'commercial',
@@ -220,7 +238,12 @@ export const KIND_RULES: Record<BuildingKind, KindRule> = {
     heightLimit: 'houseHeightLimit',
     floorHeight: 'floorHeightShop',
     slantBase: 'none',
-    setbackScale: RESIDENTIAL,
+    // Pushed right to the back of its plot. This is the defining move of a
+    // roadside コンビニ and not a detail: the car park goes in front, and a shop
+    // sitting on the pavement with its parking behind it is a different building
+    // in a different decade. 8 × 0.8 m ≈ 6.4 m, a bay plus the aisle. The
+    // concession ladder still pulls it forward on a plot too shallow to hold that.
+    setbackScale: { front: 8, side: 1, rear: 0.4 },
     corridor: 'none',
     // Two or three condensers on the roof, not a 塔屋 — a single-storey shop has
     // no lift and no water tank, and giving it one is the sort of detail that
@@ -236,6 +259,7 @@ export const KIND_RULES: Record<BuildingKind, KindRule> = {
     plantingBudget: [0, 0],
     entranceOnCorridor: false,
     pavedLot: true,
+    conform: false,
   },
 
   // --- Industrial -----------------------------------------------------------
@@ -261,6 +285,7 @@ export const KIND_RULES: Record<BuildingKind, KindRule> = {
     plantingBudget: [0, 2],
     entranceOnCorridor: false,
     pavedLot: true,
+    conform: false,
   },
   warehouse: {
     group: 'industrial',
@@ -282,6 +307,7 @@ export const KIND_RULES: Record<BuildingKind, KindRule> = {
     plantingBudget: [0, 0],
     entranceOnCorridor: false,
     pavedLot: true,
+    conform: false,
   },
 };
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_PARAMS, applyRoadLayout, cloneParams, type RoadLayout, type UseZone } from '../src/core/params.js';
 import { generateRoads } from '../src/city/Roads.js';
 import { generateCity } from '../src/city/City.js';
+import { planBuildings } from '../src/build/CityMesh.js';
 import { districtAdjacency } from '../src/city/LandUse.js';
 import { districtCentroid, type District } from '../src/city/RoadDistricts.js';
 import * as V from '../src/geom/vec2.js';
@@ -144,6 +145,33 @@ describe('land use', () => {
       atLeast('konbini', 1);
       atLeast('factory', 3);
       atLeast('warehouse', 3);
+    }
+  }, 120000);
+
+  it('leaves every コンビニ a forecourt to park in', () => {
+    // The car park is not decoration on one of these — it is most of the site,
+    // and the shop being pushed to the back of the plot is the whole reason the
+    // building type looks the way it does. A コンビニ with its glazing on the
+    // pavement is a different building from a different decade.
+    for (const layout of LAYOUTS) {
+      const params = cloneParams(DEFAULT_PARAMS);
+      applyRoadLayout(params.roads, layout);
+      const city = generateCity(params);
+      const plan = planBuildings(city, params);
+
+      for (const b of plan.buildings) {
+        if (b.spec.kind !== 'konbini') continue;
+        const f = b.lot.frontages[0]!;
+        const inward = V.neg(f.outward);
+        let clear = Infinity;
+        for (const p of b.footprint.outline) clear = Math.min(clear, V.dot(V.sub(p, f.mid), inward));
+        expect(clear, `${layout}: konbini on lot ${b.lot.id} stands ${clear.toFixed(1)} m off the street`)
+          .toBeGreaterThan(2.5);
+        expect(
+          b.lot.area - b.footprint.area,
+          `${layout}: konbini on lot ${b.lot.id} has no open ground`,
+        ).toBeGreaterThan(60);
+      }
     }
   }, 120000);
 

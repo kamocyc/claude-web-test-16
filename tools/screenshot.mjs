@@ -6,7 +6,7 @@
  *
  *   node tools/screenshot.mjs [--url http://127.0.0.1:5173] [--out shots]
  *                             [--seed sakura-3] [--only overview]
- *                             [--zones commercial,industrial]
+ *                             [--zones commercial,industrial] [--kinds konbini,factory]
  *
  * `--zones` adds two shots per 用途地域 named: one from the air and one standing
  * on the longest street inside it. Fixed camera positions cannot show the
@@ -30,6 +30,7 @@ const SEED = arg('seed', null);
 const LAYOUT = arg('layout', null);
 const ONLY = arg('only', null);
 const ZONES = arg('zones', null);
+const KINDS = arg('kinds', null);
 
 /** [name, cameraPosition, lookAtTarget] */
 const VIEWS = [
@@ -125,6 +126,18 @@ for (const zone of ZONES ? ZONES.split(',') : []) {
   await page.waitForTimeout(2500);
   await page.screenshot({ path: path.join(OUT, `${zone}-street.png`) });
   console.log(`wrote ${path.join(OUT, `${zone}-street.png`)}`);
+}
+
+for (const kind of KINDS ? KINDS.split(',') : []) {
+  const view = await page.evaluate((k) => window.__kindView(k), kind);
+  if (!view) {
+    console.log(`no ${kind} in this town`);
+    continue;
+  }
+  await page.evaluate(([p, t]) => window.__setCamera(p, t), view);
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: path.join(OUT, `kind-${kind}.png`) });
+  console.log(`wrote ${path.join(OUT, `kind-${kind}.png`)}`);
 }
 
 const stats = await page.evaluate(() => document.getElementById('hud')?.textContent ?? '');

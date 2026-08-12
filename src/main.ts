@@ -180,6 +180,18 @@ Object.assign(window as unknown as Record<string, unknown>, {
       [qx, eye * 0.6, qy],
     ];
   },
+  /** A camera looking at one building of the given use, for checking a new one. */
+  __kindView: (kind: string): [[number, number, number], [number, number, number]] | null => {
+    const lot = city?.lots.find((l) => l.zonedKind === kind);
+    if (!lot) return null;
+    const c = lot.centroid;
+    // Steep and centred: a use is easiest to judge against the *lot* it stands
+    // on, and for the drive-in ones the lot is most of the point.
+    return [
+      [c.x + 6, 38, c.y + 34],
+      [c.x, 0, c.y],
+    ];
+  },
   __zoneCentre: (zone: string): [number, number] | null => {
     const d = city?.roads.districts.find((k) => k.zone === zone);
     if (!d) return null;

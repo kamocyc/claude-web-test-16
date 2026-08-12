@@ -41,6 +41,62 @@ export function buildCommercialProps(
 
   if (spec.kind === 'shophouse') buildShopSigns(props, lot, spec, built, front, rng);
   if (spec.kind === 'zakkyo') buildTenantSigns(props, spec, built, front, rng);
+  if (spec.kind === 'konbini') buildKonbiniFurniture(props, lot, spec, built, front, rng);
+}
+
+/**
+ * A コンビニ's forecourt: the pylon sign at the entrance, the parapet band, and
+ * bollards along the pavement edge.
+ *
+ * The pylon is the identifying object at distance — it is visible from further
+ * away than the building, which is the entire reason it is there — and the
+ * bollards are what stop the car park from reading as a continuation of the
+ * road, which is what it looks like without them.
+ */
+function buildKonbiniFurniture(
+  props: PropRegistry,
+  lot: Lot,
+  spec: BuildingSpec,
+  built: BuiltBuilding,
+  front: Lot['frontages'][number],
+  rng: Rng,
+): void {
+  const inward = V.neg(front.outward);
+  const brand = rgb(rng.pick(SIGN_FACE));
+
+  // Pylon sign, set just inside the boundary at one end of the frontage.
+  const t = rng.chance(0.5) ? 0.12 : 0.88;
+  const base = V.addScaled(V.lerp(front.a, front.b, t), inward, 1.2);
+  props.add('signPole', base, 2.1, { w: 0.28, h: 4.2, d: 0.28 }, front.dir, POLE_GREY);
+  props.add('signPanel', V.addScaled(base, inward, 0.05), 4.9, { w: 0.22, h: 1.5, d: 2.3 }, front.dir, brand);
+
+  // The parapet band across the shopfront, in the same colour — the horizontal
+  // stripe over the glass that every one of these has.
+  const wall = built.mass.floors[0]?.walls.find((w) => V.dot(w.normal, front.outward) > 0.7);
+  if (wall && wall.len > 2) {
+    const mid = V.lerp(wall.a, wall.b, 0.5);
+    const top = built.mass.height;
+    props.add(
+      'signPanel',
+      V.addScaled(mid, wall.normal, 0.1),
+      top + 0.45,
+      { w: 0.18, h: 0.75, d: wall.len - 0.3 },
+      wall.dir,
+      brand,
+    );
+  }
+
+  // Bollards along the kerb, leaving the middle open as the way in.
+  const gap = 1.8;
+  const n = Math.floor(front.len / gap);
+  const entry = Math.floor(n / 2);
+  for (let i = 1; i < n; i++) {
+    if (Math.abs(i - entry) <= 1) continue;
+    const p = V.addScaled(V.addScaled(front.a, front.dir, i * gap), inward, 0.45);
+    props.add('bollard', p, 0.4, { w: 0.12, h: 0.8, d: 0.12 }, front.dir, { r: 0.85, g: 0.72, b: 0.25 });
+  }
+  void lot;
+  void spec;
 }
 
 /**

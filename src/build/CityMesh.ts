@@ -124,7 +124,7 @@ export function buildCityMesh(
   }
 
   group.add(chunks.build(materials));
-  group.add(buildGround(city, params, materials));
+  group.add(buildGround(city, params, materials, buildings));
   group.add(props.build(materials));
 
   return {

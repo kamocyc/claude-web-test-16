@@ -630,6 +630,12 @@ export function fitFootprint(
   let conformed: Footprint | null | undefined;
   const conform = (): Footprint | null => {
     if (!params.conformIrregular) return null;
+    // A shed or a shop is a catalogue rectangle put down in the middle of
+    // whatever it is given, so it never follows the boundary. Letting one try
+    // put a コンビニ on a triangular corner as a 25 m × 3 m ribbon: shrinking a
+    // wedge to its coverage limit while holding the street wall can only be done
+    // by pushing the back wall in until the building is a corridor.
+    if (!KIND_RULES[spec.kind].conform) return null;
     if (conformed === undefined) {
       conformed = conformFootprint(buildable, lot, spec, params, workFrame, rng);
       if (!conformed && diag) diag.reason = 'too-narrow';
