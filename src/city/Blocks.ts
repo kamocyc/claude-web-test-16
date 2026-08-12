@@ -83,6 +83,16 @@ export interface BlockExtraction {
 
 export interface BlockOptions {
   minArea: number;
+  /**
+   * Per-zone override of `maxArea`.
+   *
+   * Coarsening the industrial street grid is not enough on its own: the splitter
+   * runs a new street through anything over `maxArea`, so a 12,000 m² face laid
+   * out at 95 m spacing came straight back out as three 4,000 m² ones and the
+   * factory parcels with them. The two limits have to agree about how big an
+   * industrial block is allowed to be.
+   */
+  maxAreaByZone?: Partial<Record<UseZone, number>>;
   maxArea: number;
   /** How close a block edge must be to a road edge to be attributed to it. */
   attributionTolerance: number;
@@ -93,6 +103,7 @@ export interface BlockOptions {
 export const DEFAULT_BLOCK_OPTIONS: BlockOptions = {
   minArea: 200,
   maxArea: 5200,
+  maxAreaByZone: { industrial: 16000, quasiIndust: 8000 },
   attributionTolerance: 0.6,
   laneClearance: 2,
 };
@@ -126,7 +137,16 @@ export function extractBlocks(
       // An oversized block would otherwise be dropped, leaving a conspicuous
       // hole in the town. Run a street through it instead — which is what
       // actually happens when a large parcel is developed.
-      const split = splitOversized(cleaned, net, opts, opts.laneClearance);
+      //
+      // The size limit is resolved before the cut, from the district the face
+      // sits in: a 工業団地 block is meant to be several times a residential one.
+      const faceZone = districtContaining(net.districts, centroid(cleaned))?.zone ?? 'lowRise';
+      const split = splitOversized(
+        cleaned,
+        net,
+        opts.laneClearance,
+        opts.maxAreaByZone?.[faceZone] ?? opts.maxArea,
+      );
       for (const piece of split.pieces) {
         const a = area(piece);
         if (a < opts.minArea) {
@@ -166,8 +186,8 @@ export function extractBlocks(
 function splitOversized(
   poly: Polygon,
   net: RoadNetwork,
-  opts: BlockOptions,
   clearance: number,
+  maxArea: number,
 ): { pieces: Polygon[]; lanes: RoadNetwork['privateLanes'] } {
   const out: Polygon[] = [];
   const lanes: RoadNetwork['privateLanes'] = [];
@@ -176,7 +196,7 @@ function splitOversized(
 
   while (queue.length > 0 && guard++ < 32) {
     const p = queue.shift()!;
-    if (area(p) <= opts.maxArea) {
+    if (area(p) <= maxArea) {
       out.push(p);
       continue;
     }

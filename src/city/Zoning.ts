@@ -215,14 +215,26 @@ function assignClusters(lots: Lot[], blocks: Block[], params: CityParams): void 
 
     let cluster = nextCluster++;
     let runLength = 0;
+    let previous: LotKind | null = null;
     for (const lot of ordered) {
       // Only same-kind neighbours belong to the same development.
-      const cut = runLength >= 8 || (runLength >= 3 && rng.chance(params.zoning.clusterCutChance));
+      //
+      // This is what the line above has always claimed and never did: the cut
+      // rule looked at run length alone. With three uses, all residential, that
+      // was harmless — a house and the apartment beside it plausibly went up
+      // together. It stops being harmless the moment a factory and a house can
+      // be neighbours, because a cluster is a *shared style vector*, and sharing
+      // one across that boundary means a 工場 built to the era and wealth of the
+      // house next door.
+      const kindChanged = previous !== null && previous !== lot.kind;
+      const cut =
+        kindChanged || runLength >= 8 || (runLength >= 3 && rng.chance(params.zoning.clusterCutChance));
       if (cut) {
         cluster = nextCluster++;
         runLength = 0;
       }
       lot.clusterId = cluster;
+      previous = lot.kind;
       runLength++;
     }
     nextCluster++;

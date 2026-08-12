@@ -361,7 +361,52 @@ export function assignLandUse(
  * can only exist on a consolidated arterial parcel without the zoning rules ever
  * naming one.
  */
-const ZONE_LOTS: Partial<Record<UseZone, Partial<LotParams>>> = {};
+const ZONE_LOTS: Partial<Record<UseZone, Partial<LotParams>>> = {
+  industrial: {
+    maxLotArea: 4200,
+    maxLotAreaMajor: 4200,
+    widthMean: 42,
+    widthMeanMajor: 55,
+    widthMin: 22,
+    widthMax: 80,
+    depthMean: 45,
+    depthMeanMajor: 55,
+    depthMax: 70,
+    cutAngleJitter: 1,
+    // An industrial estate is a grid of large parcels fronting the street, not a
+    // warren: no 私道 into the middle of a block, and no 旗竿地 behind anything.
+    flagLotChance: 0,
+    minCoreArea: Infinity,
+  },
+  quasiIndust: {
+    maxLotArea: 900,
+    widthMean: 18,
+    depthMean: 26,
+    widthMax: 40,
+  },
+  neighbourCom: {
+    // Narrow and deep — the 間口 of a shophouse row. `widthMin` is the number to
+    // watch: `MIN_PLAN_WIDTH_MODULES` puts the floor for a building at 2.46 m and
+    // a lot much under 5 m wide starts coming back as `too-narrow`.
+    widthMean: 6.0,
+    widthSigma: 1.2,
+    widthMin: 4.6,
+    widthMax: 14,
+    depthMean: 12.5,
+    maxLotArea: 260,
+    // The one lever that makes a コンビニ site possible. It does not place one —
+    // whether a shop appears is still decided downstream from area, frontage and
+    // shallowness — it only coarsens the parcel grain on the wide roads so that
+    // such a site can occur at all. Exactly what `maxLotAreaMajor` already does
+    // for マンション, and the honest thing to adjust if too few appear.
+    widthMeanMajor: 19,
+  },
+  commercial: {
+    widthMean: 7,
+    depthMean: 16,
+    maxLotArea: 700,
+  },
+};
 
 export function zoneLotParams(base: LotParams, zone: UseZone): LotParams {
   const overlay = ZONE_LOTS[zone];

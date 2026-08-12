@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Polygon, Vec2 } from '../core/types.js';
 import * as V from '../geom/vec2.js';
+import type { UseZone } from '../core/params.js';
 import type { City } from '../city/City.js';
 import { UNAVOIDABLE_VACANCY } from '../building/types.js';
 
@@ -19,7 +20,9 @@ export type OverlayLayer =
   | 'footprints'
   | 'flagPoles'
   | 'vacantUnavoidable'
-  | 'vacantAvoidable';
+  | 'vacantAvoidable'
+  | 'landUse'
+  | 'useZones';
 
 const COLORS: Record<OverlayLayer, number> = {
   roads: 0x4aa3ff,
@@ -33,6 +36,27 @@ const COLORS: Record<OverlayLayer, number> = {
   // land nothing belongs on, red is a lot the generator failed to use.
   vacantUnavoidable: 0x9aa0a6,
   vacantAvoidable: 0xff2d55,
+  // Legend colour only; both of these are drawn per vertex.
+  landUse: 0x63e08a,
+  useZones: 0xffb03a,
+};
+
+/** Lot outline colours by use. */
+const KIND_COLORS: Record<string, number> = {
+  house: 0x63e08a,
+  apart: 0x3fbf7f,
+  mansion: 0x2f8fd0,
+  vacant: 0x9aa0a6,
+};
+
+/** District outline colours by 用途地域. */
+const ZONE_COLORS: Record<UseZone, number> = {
+  lowRise: 0x63e08a,
+  midRise: 0x3fbf7f,
+  neighbourCom: 0xffb03a,
+  commercial: 0xff5fa2,
+  quasiIndust: 0xc0a060,
+  industrial: 0x9a6bff,
 };
 
 const HEIGHTS: Record<OverlayLayer, number> = {
@@ -45,6 +69,8 @@ const HEIGHTS: Record<OverlayLayer, number> = {
   flagPoles: 0.5,
   vacantUnavoidable: 0.65,
   vacantAvoidable: 0.66,
+  landUse: 0.47,
+  useZones: 0.3,
 };
 
 export class DebugOverlay {
@@ -127,14 +153,38 @@ export class DebugOverlay {
       'vacantAvoidable',
       crossedRings(avoidable.map((l) => l.polygon), HEIGHTS.vacantAvoidable),
     );
+
+    // Land use, coloured per ring rather than per layer. Judging whether the
+    // zoning worked from the finished buildings is as hopeless as judging
+    // subdivision from them: a 工場 and a マンション are both big pale boxes from
+    // above. The district layer in particular is what answers the one question
+    // the flood fill exists to answer — is the industrial belt actually one
+    // piece, or has it broken into islands?
+    const lotRings = ringSegmentsColored(
+      city.lots.map((l) => ({
+        poly: l.polygon,
+        color: KIND_COLORS[l.zonedKind] ?? 0xffffff,
+      })),
+      HEIGHTS.landUse,
+    );
+    this.addLayer('landUse', lotRings.positions, lotRings.colors);
+
+    const zoneRings = ringSegmentsColored(
+      city.roads.districts.map((d) => ({ poly: d.polygon, color: ZONE_COLORS[d.zone] })),
+      HEIGHTS.useZones,
+    );
+    this.addLayer('useZones', zoneRings.positions, zoneRings.colors);
   }
 
-  private addLayer(layer: OverlayLayer, positions: number[]): void {
+  private addLayer(layer: OverlayLayer, positions: number[], colors?: number[]): void {
     if (positions.length === 0) return;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    // `LineBasicMaterial` takes one colour for the whole layer, so a layer that
+    // distinguishes categories has to carry them per vertex.
+    if (colors) geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     const mat = new THREE.LineBasicMaterial({
-      color: COLORS[layer],
+      ...(colors ? { vertexColors: true } : { color: COLORS[layer] }),
       transparent: true,
       opacity: 0.9,
       depthTest: false,
@@ -183,6 +233,26 @@ function crossedRings(polys: Polygon[], h: number): number[] {
     out.push(minX, h, maxY, maxX, h, minY);
   }
   return out;
+}
+
+/** Ring outlines with a colour per ring, for the category layers. */
+function ringSegmentsColored(
+  rings: { poly: Polygon; color: number }[],
+  h: number,
+): { positions: number[]; colors: number[] } {
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const c = new THREE.Color();
+  for (const { poly, color } of rings) {
+    c.setHex(color, THREE.SRGBColorSpace);
+    for (let i = 0, n = poly.length; i < n; i++) {
+      const a: Vec2 = poly[i]!;
+      const b: Vec2 = poly[(i + 1) % n]!;
+      positions.push(a.x, h, a.y, b.x, h, b.y);
+      colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
+  }
+  return { positions, colors };
 }
 
 function ringSegments(polys: Polygon[], h: number): number[] {

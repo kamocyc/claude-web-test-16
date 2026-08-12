@@ -1,5 +1,5 @@
 import type { Polygon, Vec2 } from '../core/types.js';
-import { DEG, type RoadClass, type RoadParams } from '../core/params.js';
+import { DEG, type LandUseParams, type RoadClass, type RoadParams } from '../core/params.js';
 import { makeRng, subSeed, type Rng } from '../core/rng.js';
 import * as V from '../geom/vec2.js';
 import { clipSegmentToPolygonAll } from '../geom/polygon.js';
@@ -137,9 +137,9 @@ export function gridLines(
  * live *on* the grid lines — a separately drawn collector would slice every
  * block it crossed into slivers.
  */
-export function classifyLines(rng: Rng, count: number, p: RoadParams): RoadClass[] {
+export function classifyLines(rng: Rng, count: number, p: RoadParams, spacing = p.localSpacing): RoadClass[] {
   const cls: RoadClass[] = Array.from({ length: count }, () => 'local');
-  const step = Math.max(2, Math.round(p.collectorSpacing / p.localSpacing));
+  const step = Math.max(2, Math.round(p.collectorSpacing / spacing));
   const phase = rng.int(step);
   for (let i = 0; i < count; i++) if ((i + phase) % step === 0) cls[i] = 'collector';
   return cls;
@@ -212,6 +212,7 @@ function boundaryVerdict(
   path: Path,
   boundary: DistrictBoundary[],
   p: RoadParams,
+  spacing: number,
 ): { drop: boolean } {
   const minAngle = p.minJunctionAngle * DEG;
   for (const b of boundary) {
@@ -229,7 +230,7 @@ function boundaryVerdict(
     const dir = V.normalize(V.sub(path.pts[path.pts.length - 1]!, path.pts[0]!));
     const ang = V.angleBetween(dir, b.dir);
     const parallel = Math.min(ang, Math.PI - ang) < minAngle;
-    if (parallel && gap < b.width / 2 + p.localSpacing * 0.7) return { drop: true };
+    if (parallel && gap < b.width / 2 + spacing * 0.7) return { drop: true };
   }
   return { drop: false };
 }
@@ -269,8 +270,15 @@ function boundaryAt(boundary: DistrictBoundary[], p: Vec2, tol = 1.5): DistrictB
 }
 
 /** Lay out the local streets of one district. */
-export function districtStreets(d: District, p: RoadParams): StreetLine[] {
+export function districtStreets(d: District, p: RoadParams, landUse: LandUseParams): StreetLine[] {
   if (d.area < p.minDistrictArea) return [];
+
+  // 用途地域 reaches the street network here, and this is the only place it
+  // does. A factory parcel is 3,000-4,000 m²; the ordinary 45 m grid yields
+  // blocks of 1,500-2,000 m², and `Blocks.maxArea` would cut anything larger
+  // anyway. No lot parameter can produce an industrial parcel behind a
+  // residential street grid, so the zone has to coarsen the streets themselves.
+  const spacing = d.zone === 'industrial' ? landUse.industrialLocalSpacing : p.localSpacing;
 
   const rng = makeRng(subSeed(d.seed, 'grid'));
   const frame = makeFrame(centroid(d.polygon), d.axis);
@@ -280,28 +288,28 @@ export function districtStreets(d: District, p: RoadParams): StreetLine[] {
   // Streets down the district's long axis and across it. `gridLines` returns
   // both ends of the span too; those land on the boundary, where the boundary
   // road already is, so they are dropped.
-  const us = gridLines(rng, ext.w / 2, p.localSpacing, p.gridSpacingVariation, p.minLocalSpacing)
+  const us = gridLines(rng, ext.w / 2, spacing, p.gridSpacingVariation, p.minLocalSpacing)
     .map((u) => u + ext.cx)
     .slice(1, -1);
-  const vs = gridLines(rng, ext.d / 2, p.localSpacing, p.gridSpacingVariation, p.minLocalSpacing)
+  const vs = gridLines(rng, ext.d / 2, spacing, p.gridSpacingVariation, p.minLocalSpacing)
     .map((v) => v + ext.cy)
     .slice(1, -1);
 
   const uCls = p.promoteGridLines
-    ? classifyLines(rng, us.length, p)
+    ? classifyLines(rng, us.length, p, spacing)
     : (Array.from({ length: us.length }, () => 'local') as RoadClass[]);
   const vCls = p.promoteGridLines
-    ? classifyLines(rng, vs.length, p)
+    ? classifyLines(rng, vs.length, p, spacing)
     : (Array.from({ length: vs.length }, () => 'local') as RoadClass[]);
 
   // Run the lines well past the district so they always reach its boundary.
-  const pad = p.localSpacing;
+  const pad = spacing;
   const family = [
     ...buildFamily(rng, frame, us, ext.cy - ext.d / 2 - pad, ext.cy + ext.d / 2 + pad, 1, uCls, p),
     ...buildFamily(rng, frame, vs, ext.cx - ext.w / 2 - pad, ext.cx + ext.w / 2 + pad, 0, vCls, p),
   ];
 
-  const kept = family.filter((line) => !boundaryVerdict(line.path, d.boundary, p).drop);
+  const kept = family.filter((line) => !boundaryVerdict(line.path, d.boundary, p, spacing).drop);
 
   // Every junction becomes an explicit shared node: cut each line at its
   // crossings with the others up front rather than leaving it to `makePlanar`.

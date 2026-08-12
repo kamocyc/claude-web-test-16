@@ -96,7 +96,7 @@ export function generateRoads(seed: string, p: RoadParams, landUse: LandUseParam
     raw.addSegment(tier1.node(e.a).p, tier1.node(e.b).p, e.data);
   }
   for (const d of districts) {
-    for (const line of districtStreets(d, p)) {
+    for (const line of districtStreets(d, p, landUse)) {
       for (let i = 0; i + 1 < line.pts.length; i++) {
         raw.addSegment(line.pts[i]!, line.pts[i + 1]!, {
           cls: line.cls,

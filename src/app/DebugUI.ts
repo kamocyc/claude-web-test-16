@@ -31,6 +31,8 @@ const OVERLAY_LAYERS: [OverlayLayer, string][] = [
   ['flagPoles', '旗竿地の竿'],
   ['vacantUnavoidable', '空き地（やむを得ない）'],
   ['vacantAvoidable', '空き地（要調査）'],
+  ['landUse', '用途（敷地の色分け）'],
+  ['useZones', '用途地域（地区）'],
 ];
 
 export function createDebugUI(opts: DebugUIOptions): GUI {
@@ -103,6 +105,18 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fLots.add(params.lots, 'minFrontage', 0.5, 8, 0.1).name('最小間口(接道)');
   // The real gate on a scrap: `minLotArea` alone never rejects one.
   fLots.add(params.lots, 'minInscribedRadius', 0.5, 4, 0.1).name('最小内接円の半径');
+
+  // --- Land use ------------------------------------------------------------
+  // Upstream of everything in 用途配分 below: this decides the *map*, that
+  // decides what gets built under it. Changing the industrial share moves the
+  // street grid, so these all force a full regeneration like every other slider.
+  const fUse = gui.addFolder('用途地域').close();
+  fUse.add(params.landUse, 'industrialShare', 0, 0.4, 0.01).name('工業地区の面積比');
+  fUse.add(params.landUse, 'industrialMinStationDist', 0, 600, 10).name('駅から工業までの距離');
+  fUse.add(params.landUse, 'industrialLocalSpacing', 45, 160, 5).name('工業地区の街路間隔');
+  fUse.add(params.landUse, 'commercialCoreRadius', 60, 400, 10).name('駅前商業の半径');
+  fUse.add(params.landUse, 'neighbourhoodRadius', 100, 600, 10).name('近隣商業の広がり');
+  fUse.add(params.landUse, 'quasiIndustrialRing').name('工業を準工業で囲む');
 
   // --- Zoning --------------------------------------------------------------
   const fZone = gui.addFolder('用途配分').close();
