@@ -331,12 +331,26 @@ export function assignLandUse(
   // districts — every district has Tier-1 boundary, because districts *are* the
   // faces of the Tier-1 graph — leaving one 2,900 m² scrap for industry.
   // 近隣商業 spreads from the shops it is named after, so it grows off the core.
+  // Bounded by area as well as by reach, and for the same reason the industrial
+  // fill is: the districts do not shrink when the town does, so a pure radius
+  // test hands most of a small map to the shops. Nearest first, until the shops
+  // have had their share.
+  const candidates: number[] = [];
   for (let i = 0; i < feat.length; i++) {
     if (districts[i]!.zone !== 'lowRise') continue;
     if (core < 0 || !adj[i]!.includes(core)) continue;
     if (feat[i]!.edgeDist > p.neighbourhoodRadius) continue;
     if (adj[i]!.some((j) => districts[j]!.zone === 'industrial')) continue;
+    candidates.push(i);
+  }
+  candidates.sort((a, b) => feat[a]!.edgeDist - feat[b]!.edgeDist);
+
+  let shopArea = core >= 0 ? districts[core]!.area : 0;
+  const shopCeiling = p.commercialShare * townArea;
+  for (const i of candidates) {
+    if (shopArea + districts[i]!.area > shopCeiling) continue;
     districts[i]!.zone = 'neighbourCom';
+    shopArea += districts[i]!.area;
   }
 
   for (let i = 0; i < feat.length; i++) {
@@ -402,8 +416,15 @@ const ZONE_LOTS: Partial<Record<UseZone, Partial<LotParams>>> = {
     widthMeanMajor: 19,
   },
   commercial: {
-    widthMean: 7,
-    depthMean: 16,
+    // A downtown block is a mix, and it has to be: the narrow parcels become
+    // 店舗併用住宅 and the wide ones 雑居ビル, so a single 7 m grain gave a
+    // 商業地域 with no 雑居ビル in it at all — nothing cleared the 8 m frontage
+    // the tenant floors need.
+    widthMean: 9,
+    widthSigma: 3,
+    widthMin: 5,
+    widthMax: 22,
+    depthMean: 18,
     maxLotArea: 700,
   },
 };

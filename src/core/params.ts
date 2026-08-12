@@ -58,6 +58,15 @@ export interface LandUseParams {
   commercialCoreRadius: number;
   /** How far 近隣商業 may reach from the station along a wide road, metres. */
   neighbourhoodRadius: number;
+  /**
+   * Ceiling on the combined area of 商業 and 近隣商業, as a share of the town.
+   *
+   * A radius alone does not bound it. The town shrinks but the districts do not
+   * shrink with it, so at `extent: 190` the shops reached most of the map and a
+   * quarter of every lot came out a 店舗併用住宅. Shops are a share of a town, not
+   * a distance from its station.
+   */
+  commercialShare: number;
   /** Target share of the town area given over to 工業地域, [0, 1]. */
   industrialShare: number;
   /** No industrial district may come closer than this to the station, metres. */
@@ -219,6 +228,28 @@ export interface ZoningParams {
   apartUrbanityHi: number;
   /** Probability of cutting the flood fill when growing a 分譲地 cluster. */
   clusterCutChance: number;
+
+  /** 店舗併用住宅: the 間口 range a shophouse row is cut into. */
+  shophouseMinFrontage: number;
+  shophouseMaxFrontage: number;
+  /**
+   * Urbanity at which a shop is worth opening on a street that is not a main
+   * road. Being inside 近隣商業 is not enough on its own — the zone is a whole
+   * district, and a 商店街 is a street.
+   */
+  shophouseMinUrbanity: number;
+  zakkyoMinArea: number;
+  zakkyoMinUrbanity: number;
+  /** コンビニ: a wide, shallow parcel on a wide road, and one per district. */
+  konbiniMinArea: number;
+  konbiniMinFrontage: number;
+  /** Ratio of depth to frontage above which a parcel is too deep for a forecourt. */
+  konbiniMaxDepthRatio: number;
+  konbiniPerDistrict: number;
+  factoryMinArea: number;
+  warehouseMinArea: number;
+  /** Smallest circle an industrial shed needs to fit, radius in metres. */
+  industrialMinRadius: number;
 }
 
 export interface BuildingParams {
@@ -260,6 +291,31 @@ export interface BuildingParams {
   floorHeightHouse: number;
   floorHeightApart: number;
   floorHeightMansion: number;
+  /** 店舗併用住宅 and コンビニ: a shop storey is taller than a living one. */
+  floorHeightShop: number;
+  /** 雑居ビル: one tenant per floor. */
+  floorHeightTenant: number;
+  /**
+   * A factory bay is one storey but the height of three. `mass.ts` skips the
+   * 斜線 cut entirely below two floors, so a tall single storey is never sliced.
+   */
+  floorHeightFactory: number;
+  floorHeightWarehouse: number;
+  /** 店舗併用住宅: 建ぺい率 and 容積率 on a 近隣商業 parcel. */
+  shopCoverage: number;
+  shopFar: number;
+  zakkyoCoverage: number;
+  zakkyoFar: number;
+  zakkyoHeightLimit: number;
+  /** A コンビニ covers little of its plot; most of it is the car park. */
+  konbiniCoverage: number;
+  industrialCoverage: number;
+  industrialFar: number;
+  industrialHeightLimit: number;
+  /** Depth of a shopfront 庇, clamped by whatever room the wall has. */
+  awningDepth: number;
+  /** Height of the 看板 band above a shopfront. */
+  signBandHeight: number;
   minFloorArea: number;
   /**
    * Build the outline from the buildable area itself on an irregular lot, rather
@@ -383,6 +439,7 @@ export const DEFAULT_PARAMS: CityParams = {
   landUse: {
     commercialCoreRadius: 180,
     neighbourhoodRadius: 320,
+    commercialShare: 0.16,
     industrialShare: 0.18,
     industrialMinStationDist: 260,
     industrialLocalSpacing: 95,
@@ -430,6 +487,18 @@ export const DEFAULT_PARAMS: CityParams = {
     apartUrbanityLo: 0.3,
     apartUrbanityHi: 0.75,
     clusterCutChance: 0.25,
+    shophouseMinFrontage: 3.6,
+    shophouseMaxFrontage: 9,
+    shophouseMinUrbanity: 0.5,
+    zakkyoMinArea: 200,
+    zakkyoMinUrbanity: 0.5,
+    konbiniMinArea: 380,
+    konbiniMinFrontage: 17,
+    konbiniMaxDepthRatio: 1.6,
+    konbiniPerDistrict: 1,
+    factoryMinArea: 900,
+    warehouseMinArea: 1600,
+    industrialMinRadius: 9,
   },
   buildings: {
     module: 0.91,
@@ -454,6 +523,21 @@ export const DEFAULT_PARAMS: CityParams = {
     floorHeightHouse: 2.9,
     floorHeightApart: 2.75,
     floorHeightMansion: 3.0,
+    floorHeightShop: 3.4,
+    floorHeightTenant: 3.3,
+    floorHeightFactory: 7.6,
+    floorHeightWarehouse: 9.0,
+    shopCoverage: 0.8,
+    shopFar: 3.0,
+    zakkyoCoverage: 0.8,
+    zakkyoFar: 4.0,
+    zakkyoHeightLimit: 31,
+    konbiniCoverage: 0.35,
+    industrialCoverage: 0.6,
+    industrialFar: 2.0,
+    industrialHeightLimit: 20,
+    awningDepth: 1.0,
+    signBandHeight: 0.9,
     minFloorArea: 19,
     conformIrregular: true,
     conformFillThreshold: 0.62,

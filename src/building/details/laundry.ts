@@ -2,6 +2,7 @@ import type { Rng } from '../../core/rng.js';
 import * as V from '../../geom/vec2.js';
 import type { GeometryBuffer } from '../../build/GeometryBuffer.js';
 import { contains } from '../../geom/polygon.js';
+import { KIND_RULES } from '../kinds.js';
 import type { BuildingMass, BuildingSpec } from '../types.js';
 
 /**
@@ -34,7 +35,7 @@ export function buildLaundry(
   for (const wall of walls) {
     const units = Math.max(1, Math.floor(wall.len / spec.unitWidth));
     for (const floor of mass.floors) {
-      if (floor.index === 0 && spec.kind === 'mansion') continue;
+      if (floor.index === 0 && KIND_RULES[spec.kind].corridor === 'mansion') continue;
       // Skip a floor that has stepped back off this wall, or the washing hangs
       // in mid-air where the balcony used to be.
       const probe = V.addScaled(V.lerp(wall.a, wall.b, 0.5), wall.normal, -0.15);

@@ -1,10 +1,13 @@
 import * as THREE from 'three';
 import {
+  makeAlcPanelTexture,
   makeConcreteBlockTexture,
   makeGroundTexture,
   makeKawaraTexture,
   makeMetalRoofTexture,
   makeMortarTexture,
+  makeRibbedMetalTexture,
+  makeShutterTexture,
   makeSidingTexture,
   makeTileTexture,
 } from './textures.js';
@@ -25,8 +28,11 @@ export type MaterialFamily =
   | 'mortar'
   | 'tile'
   | 'concrete'
+  | 'alcPanel'
+  | 'shutter'
   | 'roofMetal'
   | 'roofKawara'
+  | 'roofRibbed'
   | 'glass'
   | 'metal'
   | 'ground'
@@ -70,6 +76,9 @@ export function createMaterials(anisotropy: number): MaterialLibrary {
     concrete: makeConcreteBlockTexture(anisotropy),
     roofMetal: makeMetalRoofTexture(anisotropy),
     roofKawara: makeKawaraTexture(anisotropy),
+    roofRibbed: makeRibbedMetalTexture(anisotropy),
+    alcPanel: makeAlcPanelTexture(anisotropy),
+    shutter: makeShutterTexture(anisotropy),
     ground: makeGroundTexture(anisotropy),
   };
 
@@ -89,6 +98,23 @@ export function createMaterials(anisotropy: number): MaterialLibrary {
       metalness: 0.25,
     }),
     roofKawara: std(tex.roofKawara.map, { normalMap: tex.roofKawara.normal, normalScale: new THREE.Vector2(1.1, 1.1), roughness: 0.65 }),
+    roofRibbed: std(tex.roofRibbed.map, {
+      normalMap: tex.roofRibbed.normal,
+      normalScale: new THREE.Vector2(1.2, 1.2),
+      roughness: 0.55,
+      metalness: 0.3,
+    }),
+    alcPanel: std(tex.alcPanel.map, {
+      normalMap: tex.alcPanel.normal,
+      normalScale: new THREE.Vector2(0.5, 0.5),
+      roughness: 0.88,
+    }),
+    shutter: std(tex.shutter.map, {
+      normalMap: tex.shutter.normal,
+      normalScale: new THREE.Vector2(0.9, 0.9),
+      roughness: 0.55,
+      metalness: 0.35,
+    }),
     // Glass is the one family that does not take a vertex tint — what makes it
     // read as glass is the environment reflection, so it gets its own material.
     glass: new THREE.MeshStandardMaterial({
@@ -112,6 +138,9 @@ export function createMaterials(anisotropy: number): MaterialLibrary {
     ['concrete', tex.concrete],
     ['roofMetal', tex.roofMetal],
     ['roofKawara', tex.roofKawara],
+    ['roofRibbed', tex.roofRibbed],
+    ['alcPanel', tex.alcPanel],
+    ['shutter', tex.shutter],
     ['ground', tex.ground],
   ] as const;
 
@@ -128,6 +157,11 @@ export function createMaterials(anisotropy: number): MaterialLibrary {
       'glass',
       'metal',
       'foliage',
+      // Appended rather than slotted in beside their relatives: the order is the
+      // chunk-merge order, and moving an existing family changes every mesh.
+      'roofRibbed',
+      'alcPanel',
+      'shutter',
     ],
     setEnvironment(env) {
       for (const m of Object.values(materials)) {

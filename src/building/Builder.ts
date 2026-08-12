@@ -6,6 +6,7 @@ import type { Lot } from '../city/Lots.js';
 import { GeometryBuffer } from '../build/GeometryBuffer.js';
 import type { MaterialFamily } from '../material/materials.js';
 import { groundGrime } from '../material/palettes.js';
+import { KIND_RULES } from './kinds.js';
 import { computeEnvelope, fitFootprint, type FitDiagnostics } from './footprint.js';
 import { buildMass } from './mass.js';
 import { buildRoof } from './roof.js';
@@ -83,16 +84,31 @@ export function buildBuilding(
   let built: BuildingParams = params;
   const diag: FitDiagnostics = { reason: null };
 
+  // The use's own setbacks, before the concession ladder relaxes them further.
+  // A 長屋's side setback is 0, and 0 survives every rung of the ladder — which
+  // is exactly right: a party wall does not become less of a party wall because
+  // the parcel turned out to be awkward.
+  const scale = KIND_RULES[spec.kind].setbackScale;
+  const useParams: BuildingParams =
+    scale.front === 1 && scale.side === 1 && scale.rear === 1
+      ? params
+      : {
+          ...params,
+          frontSetback: params.frontSetback * scale.front,
+          sideSetback: params.sideSetback * scale.side,
+          rearSetback: params.rearSetback * scale.rear,
+        };
+
   for (const c of CONCESSIONS) {
     const relaxed: BuildingParams =
       c.setback === 1 && c.floorArea === 1
-        ? params
+        ? useParams
         : {
-            ...params,
-            frontSetback: params.frontSetback * c.setback,
-            sideSetback: params.sideSetback * c.setback,
-            rearSetback: params.rearSetback * c.setback,
-            minFloorArea: params.minFloorArea * c.floorArea,
+            ...useParams,
+            frontSetback: useParams.frontSetback * c.setback,
+            sideSetback: useParams.sideSetback * c.setback,
+            rearSetback: useParams.rearSetback * c.setback,
+            minFloorArea: useParams.minFloorArea * c.floorArea,
           };
     const trySpec = c.carPad ? spec : { ...spec, wantsCarPad: false };
 
@@ -119,6 +135,7 @@ export function buildBuilding(
   // street while genuinely rearranging its openings.
   const facadeSeed = spec.mirrored ? subSeed(lot.seed, 'mirror') : lot.seed;
 
+  const rule = KIND_RULES[spec.kind];
   const mass = buildMass(footprint, envelope, spec, lot, built);
   const buffers: BufferSet = {};
 
@@ -186,7 +203,7 @@ export function buildBuilding(
     );
   }
 
-  if (spec.hasPenthouse) {
+  if (spec.roofPlant === 'penthouse') {
     buildRooftopPlant(
       { wall: concreteBuf, metal: metalBuf },
       tall.polygon,
@@ -196,7 +213,7 @@ export function buildBuilding(
     );
   }
 
-  if (spec.kind !== 'house') {
+  if (rule.laundry) {
     buildLaundry(metalBuf, mass, spec, rng);
   }
 
@@ -224,7 +241,7 @@ function buildDownspouts(
   rng: ReturnType<typeof makeRng>,
 ): void {
   buf.setColor({ r: 0.62, g: 0.61, b: 0.58 });
-  const spacing = spec.kind === 'mansion' ? 7 : 5.5;
+  const spacing = KIND_RULES[spec.kind].downspoutSpacing;
 
   for (const stack of mass.stacks) {
     for (const wall of stack.walls) {

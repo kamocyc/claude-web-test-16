@@ -17,7 +17,7 @@ import { cleanPolygon } from '../geom/simplify.js';
 import type { Block } from './Blocks.js';
 import { zoneLotParams } from './LandUse.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
-import type { VacancyReason } from '../building/types.js';
+import type { BuildingKind, VacancyReason } from '../building/types.js';
 import { laneClears } from './RoadClearance.js';
 
 /**
@@ -36,7 +36,8 @@ import { laneClears } from './RoadClearance.js';
  * frontage by construction.
  */
 
-export type LotKind = 'house' | 'apart' | 'mansion' | 'vacant';
+/** What a lot is used for: a building, or nothing. */
+export type LotKind = BuildingKind | 'vacant';
 
 export interface LotFrontage {
   /** Index of the frontage edge in `polygon`. */

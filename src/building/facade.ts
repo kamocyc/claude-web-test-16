@@ -5,6 +5,7 @@ import * as V from '../geom/vec2.js';
 import { groundGrime } from '../material/palettes.js';
 import type { GeometryBuffer } from '../build/GeometryBuffer.js';
 import type { BuildingSpec, Floor, Wall } from './types.js';
+import { KIND_RULES } from './kinds.js';
 
 /**
  * Façade generation as a one-dimensional split grammar per wall, per floor.
@@ -248,7 +249,7 @@ function buildWallGeometry(
   const at = (u: number, offset = 0): Vec2 =>
     V.addScaled(V.addScaled(wall.a, wall.dir, u), wall.normal, offset);
 
-  const sill = floor.y0 + (spec.kind === 'house' ? 0.95 : 0.9);
+  const sill = floor.y0 + KIND_RULES[spec.kind].sill;
   const head = floor.y1 - 0.42;
   const wallH = floor.y1 - floor.y0;
 

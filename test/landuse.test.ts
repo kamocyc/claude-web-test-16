@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PARAMS, applyRoadLayout, cloneParams, type RoadLayout, type UseZone } from '../src/core/params.js';
 import { generateRoads } from '../src/city/Roads.js';
+import { generateCity } from '../src/city/City.js';
 import { districtAdjacency } from '../src/city/LandUse.js';
 import { districtCentroid, type District } from '../src/city/RoadDistricts.js';
 import * as V from '../src/geom/vec2.js';
@@ -120,6 +121,31 @@ describe('land use', () => {
       }
     }
   }, 60000);
+
+  it('actually builds every use it defines', () => {
+    // At the shipped extent, in both layouts. A gate that quietly stops firing —
+    // a threshold drifting past what the subdivision can produce — breaks no
+    // other invariant in the suite: the town is still valid, it has just lost a
+    // whole category of building, and nothing would say so.
+    for (const layout of LAYOUTS) {
+      const params = cloneParams(DEFAULT_PARAMS);
+      applyRoadLayout(params.roads, layout);
+      const city = generateCity(params);
+      const counts: Record<string, number> = {};
+      for (const l of city.lots) counts[l.zonedKind] = (counts[l.zonedKind] ?? 0) + 1;
+
+      const n = city.lots.length;
+      const atLeast = (kind: string, min: number) =>
+        expect(counts[kind] ?? 0, `${layout}: ${kind} = ${counts[kind] ?? 0} of ${n} lots`).toBeGreaterThanOrEqual(min);
+      atLeast('house', Math.floor(n * 0.2));
+      atLeast('apart', 10);
+      atLeast('shophouse', 8);
+      atLeast('zakkyo', 3);
+      atLeast('konbini', 1);
+      atLeast('factory', 3);
+      atLeast('warehouse', 3);
+    }
+  }, 120000);
 
   it('is deterministic, and does vary by seed', () => {
     const zonesOf = (seed: string) =>

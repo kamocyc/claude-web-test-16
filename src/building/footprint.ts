@@ -28,6 +28,7 @@ import {
 } from '../geom/obb.js';
 import { projectionRoom } from './mass.js';
 import type { Lot } from '../city/Lots.js';
+import { KIND_RULES } from './kinds.js';
 import type {
   BuildEnvelope,
   BuildingSpec,
@@ -326,17 +327,24 @@ function computeSlantPlanes(lot: Lot, spec: BuildingSpec, params: BuildingParams
   const planes: SlantPlane[] = [];
 
   // 北側斜線: from the lot's northern boundary. North is -Z in plan coordinates.
-  let northMost: { p: Vec2; y: number } | null = null;
-  for (const p of lot.polygon) {
-    if (!northMost || p.y < northMost.y) northMost = { p, y: p.y };
-  }
-  if (northMost) {
-    planes.push({
-      origin: northMost.p,
-      inwardNormal: SOUTH,
-      baseHeight: spec.kind === 'mansion' ? params.northSlantBaseMid : params.northSlantBaseLow,
-      slope: params.northSlantSlope,
-    });
+  //
+  // Only in 低層住専 and 中高層住専. A factory or a 雑居ビル is genuinely not
+  // subject to it — which is also what keeps a 20 m shed from being sliced into
+  // steps by a rule written for the sunlight of the house behind it.
+  const slant = KIND_RULES[spec.kind].slantBase;
+  if (slant !== 'none') {
+    let northMost: { p: Vec2; y: number } | null = null;
+    for (const p of lot.polygon) {
+      if (!northMost || p.y < northMost.y) northMost = { p, y: p.y };
+    }
+    if (northMost) {
+      planes.push({
+        origin: northMost.p,
+        inwardNormal: SOUTH,
+        baseHeight: slant === 'mid' ? params.northSlantBaseMid : params.northSlantBaseLow,
+        slope: params.northSlantSlope,
+      });
+    }
   }
 
   // 道路斜線: measured from the far side of the fronting road.
@@ -1100,7 +1108,7 @@ function chooseEntrance(
   spec: BuildingSpec,
   module: number,
 ): number {
-  if (spec.kind === 'apart') return -1; // Unit doors on the corridor are the entrances.
+  if (KIND_RULES[spec.kind].entranceOnCorridor) return -1; // Unit doors are the entrances.
   const front = lot.frontages[0];
   if (!front) return -1;
 

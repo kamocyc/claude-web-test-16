@@ -2,6 +2,7 @@ import type { Vec2 } from '../../core/types.js';
 import type { Rng } from '../../core/rng.js';
 import * as V from '../../geom/vec2.js';
 import type { GeometryBuffer } from '../../build/GeometryBuffer.js';
+import { KIND_RULES } from '../kinds.js';
 import type { BuildingMass, BuildingSpec, Floor, Wall } from '../types.js';
 
 /**
@@ -53,7 +54,7 @@ export function buildCorridorAndStairs(
   const room = Math.min(...runs.map((r) => r.wall.room));
   const width = Math.min(spec.corridorWidth, room - 0.15);
   if (width < 0.9) return;
-  const isMansion = spec.kind === 'mansion';
+  const isMansion = KIND_RULES[spec.kind].corridor === 'mansion';
 
   // One post run per contiguous corridor wall, from grade to the topmost deck it
   // carries. The old code drew [0, h] at floor 1 and again at floor 2 over

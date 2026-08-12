@@ -63,19 +63,21 @@ function hashBuildings(plan: ReturnType<typeof planBuildings>): number {
  */
 const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }> = {
   'sakura-3/district': {
-    lots: 2284805999,
-    buildings: 79657497,
-    counts: '{"house":501,"apart":109,"mansion":12,"vacant":16}',
+    lots: 3729770311,
+    buildings: 1820225895,
+    counts:
+      '{"house":361,"apart":131,"mansion":9,"factory":1,"shophouse":34,"vacant":5,"zakkyo":4,"konbini":2}',
   },
   'sakura-3/grid': {
-    lots: 408434492,
-    buildings: 2604965013,
-    counts: '{"apart":187,"house":245,"vacant":1}',
+    lots: 2354422704,
+    buildings: 1913408838,
+    counts: '{"warehouse":5,"factory":5,"apart":177,"house":244,"konbini":1,"vacant":1}',
   },
   'kaede-11/district': {
-    lots: 315615892,
-    buildings: 4234369658,
-    counts: '{"house":392,"apart":113,"mansion":19,"vacant":14}',
+    lots: 2775236398,
+    buildings: 609262053,
+    counts:
+      '{"house":251,"apart":152,"mansion":13,"konbini":2,"vacant":8,"zakkyo":13,"shophouse":2}',
   },
 };
 

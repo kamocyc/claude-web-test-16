@@ -8,6 +8,7 @@ import { CAR_BODY, FOLIAGE } from '../material/palettes.js';
 import type { Lot } from '../city/Lots.js';
 import type { BuiltBuilding } from '../building/Builder.js';
 import type { BuildingSpec } from '../building/types.js';
+import { KIND_RULES } from '../building/kinds.js';
 import { PropRegistry } from './PropRegistry.js';
 
 /**
@@ -31,12 +32,17 @@ export function buildSiteProps(
   rng: Rng,
 ): void {
   const cfg = params.props;
+  const rule = KIND_RULES[spec.kind];
   const frontIdx = new Set(lot.frontages.map((f) => f.i));
 
-  if (cfg.fences) buildBoundary(props, lot, spec, frontIdx, rng);
-  if (cfg.gates) buildGate(props, lot, spec, rng);
+  // Each pass is gated on the *use* as well as the global toggle. A factory has
+  // a mesh fence and no 門柱; a コンビニ has neither, and no garden either — its
+  // open ground is the car park. Leaving these on the global toggles alone is
+  // what would put a mailbox and a pot of shrubs outside a warehouse.
+  if (cfg.fences && rule.fence !== 'none') buildBoundary(props, lot, spec, frontIdx, rng);
+  if (cfg.gates && rule.gate) buildGate(props, lot, spec, rng);
   if (cfg.parking && built.envelope.carPad) buildCarPad(props, built.envelope.carPad, lot, params, rng);
-  if (cfg.vegetation) buildPlanting(props, lot, built, spec, rng);
+  if (cfg.vegetation && rule.planting) buildPlanting(props, lot, built, spec, rng);
 }
 
 /**
@@ -58,8 +64,15 @@ function buildBoundary(
     if (e.len < 0.6) continue;
 
     // Frontage gets a low base only, so the house stays visible from the street.
-    const height = isFront ? Math.min(0.55, spec.fenceHeight * 0.4) : spec.fenceHeight;
-    const style = isFront ? 'lowBlock' : spec.fenceStyle;
+    const height =
+      isFront && KIND_RULES[spec.kind].fence !== 'mesh'
+        ? Math.min(0.55, spec.fenceHeight * 0.4)
+        : spec.fenceHeight;
+    // A mesh fence runs right around an industrial parcel, frontage included —
+    // that is the point of it. Only a residential boundary drops to a low base
+    // at the street so the house stays visible.
+    const industrial = KIND_RULES[spec.kind].fence === 'mesh';
+    const style = isFront && !industrial ? 'lowBlock' : spec.fenceStyle;
     // Set the wall just inside the boundary so neighbours' walls do not z-fight.
     const inset = 0.06;
 
@@ -266,7 +279,8 @@ function buildPlanting(
     return true;
   };
 
-  const budget = spec.kind === 'house' ? 3 + rng.int(4) : 2 + rng.int(3);
+  const [budgetBase, budgetExtra] = KIND_RULES[spec.kind].plantingBudget;
+  const budget = budgetBase + (budgetExtra > 0 ? rng.int(budgetExtra) : 0);
   for (let placed = 0, attempts = 0; placed < budget && attempts < budget * 6; attempts++) {
     const p = randomPointIn(inner, rng);
     if (!p || !isFree(p)) continue;

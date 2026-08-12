@@ -1,7 +1,7 @@
 import type * as THREE from 'three';
 import { Color } from 'three';
 import { describe, expect, it } from 'vitest';
-import { ROOF_KAWARA, ROOF_METAL } from '../src/material/palettes.js';
+import { ROOF_KAWARA, ROOF_METAL, ROOF_RIBBED } from '../src/material/palettes.js';
 import { DEFAULT_PARAMS, cloneParams } from '../src/core/params.js';
 import { generateCity } from '../src/city/City.js';
 import { makeBuildingSpec, clusterStyle } from '../src/building/style.js';
@@ -242,7 +242,12 @@ describe('building geometry', () => {
    * inside the gaps between swatches, so the nearest one is the one that was
    * drawn and this reads back `roofHueMix` exactly.
    */
-  const SWATCHES = [...ROOF_METAL, ...ROOF_KAWARA];
+  // 折板 has to be in here, not just the domestic palettes. It is tagged with the
+  // same `RoofHue` families precisely so `roofHueMix` governs the industrial
+  // quarter too, and leaving it out would bucket every factory roof to whichever
+  // house swatch happened to be nearest — quietly corrupting the readback of the
+  // one setting that decides what the town looks like from the air.
+  const SWATCHES = [...ROOF_METAL, ...ROOF_KAWARA, ...ROOF_RIBBED];
   const roofHue = (c: THREE.Color): string => {
     let best = SWATCHES[0]!;
     let bestD = Infinity;
