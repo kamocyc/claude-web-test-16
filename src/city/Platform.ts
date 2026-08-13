@@ -2,7 +2,7 @@ import type { Vec2 } from '../core/types.js';
 import type { PlatformParams } from '../core/params.js';
 import * as V from '../geom/vec2.js';
 import type { Terrain } from '../terrain/Terrain.js';
-import type { RoadHeights } from './RoadProfile.js';
+import type { LaneHeights, RoadHeights } from './RoadProfile.js';
 import type { RoadNetwork } from './Roads.js';
 import type { Lot } from './Lots.js';
 
@@ -68,13 +68,14 @@ export function assignPlatforms(
   net: RoadNetwork,
   terrain: Terrain,
   heights: RoadHeights,
+  lanes: LaneHeights,
   p: PlatformParams,
 ): void {
   if (!p.enabled || heights.flat) {
     for (const lot of lots) lot.platform = FLAT_PLATFORM;
     return;
   }
-  for (const lot of lots) lot.platform = computePlatform(lot, net, terrain, heights, p);
+  for (const lot of lots) lot.platform = computePlatform(lot, net, terrain, heights, lanes, p);
 }
 
 export function computePlatform(
@@ -82,9 +83,10 @@ export function computePlatform(
   net: RoadNetwork,
   terrain: Terrain,
   heights: RoadHeights,
+  lanes: LaneHeights,
   p: PlatformParams,
 ): LotPlatform {
-  const streetY = frontageHeight(lot, net, heights, terrain);
+  const streetY = frontageHeight(lot, net, heights, lanes, terrain);
   const ground = terrain.extremesOver(lot.polygon, 3);
 
   // Level to the street, within a cut and a fill the site could plausibly take,
@@ -129,12 +131,18 @@ export function computePlatform(
 /**
  * The design height of the road at the lot's primary frontage.
  *
- * Falls back to the terrain when the lot fronts a private lane, which has no
- * road edge of its own and therefore no solved profile. That is the right
- * fallback rather than a failure: a 私道 is graded by whoever built it, which in
- * practice means it follows the ground.
+ * A lot fronting a 私道 is levelled to the *lane*, which now has a profile of its
+ * own. It used to borrow the height of whatever road was within 30 m — the same
+ * borrowing that put the lane itself inside the hill — so a house behind a block
+ * could be levelled to a street it does not front and cannot see.
  */
-function frontageHeight(lot: Lot, net: RoadNetwork, heights: RoadHeights, terrain: Terrain): number {
+function frontageHeight(
+  lot: Lot,
+  net: RoadNetwork,
+  heights: RoadHeights,
+  lanes: LaneHeights,
+  terrain: Terrain,
+): number {
   const f = lot.frontages[0];
   if (!f) return terrain.heightAtXY(lot.centroid.x, lot.centroid.y);
 
@@ -147,6 +155,11 @@ function frontageHeight(lot: Lot, net: RoadNetwork, heights: RoadHeights, terrai
       return heights.alongEdge(e, t);
     }
   }
+  // Half the lane width plus the setback the subdivider left, with a little to
+  // spare: far enough to find the lane in front, not far enough to reach the
+  // next street over.
+  const onLane = lanes.nearestLaneHeight(f.mid, 8);
+  if (onLane !== null) return onLane;
   const near = heights.nearestRoadHeight(f.mid, 30);
   return near ?? terrain.heightAtXY(f.mid.x, f.mid.y);
 }

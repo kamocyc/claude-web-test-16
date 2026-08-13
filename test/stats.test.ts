@@ -4,7 +4,7 @@ import { generateCity } from '../src/city/City.js';
 import { clearanceViolations } from '../src/city/RoadClearance.js';
 import { districtAdjacency } from '../src/city/LandUse.js';
 import { planBuildings } from '../src/build/CityMesh.js';
-import { UNAVOIDABLE_VACANCY } from '../src/building/types.js';
+import { UNBUILDABLE_VACANCY, UNSOLD_VACANCY } from '../src/building/types.js';
 
 /**
  * Not an assertion suite — a printout of what the generator actually produces,
@@ -26,9 +26,14 @@ describe('city statistics', () => {
     const plan = planBuildings(city, params);
     const counts: Record<string, number> = {};
     for (const l of city.lots) counts[l.kind] = (counts[l.kind] ?? 0) + 1;
-    const unavoidable = city.lots.filter(
-      (l) => l.vacancyReason !== null && UNAVOIDABLE_VACANCY.includes(l.vacancyReason),
-    ).length;
+    // Three figures, not one. "Unavoidable" summed the plot that has not sold
+    // yet with the sliver no house could ever stand on, and they answer
+    // different questions: one of them goes away if you age the town.
+    const inGroup = (group: readonly typeof city.lots[number]['vacancyReason'][]) =>
+      city.lots.filter((l) => l.vacancyReason !== null && group.includes(l.vacancyReason)).length;
+    const unsold = inGroup(UNSOLD_VACANCY);
+    const unbuildable = inGroup(UNBUILDABLE_VACANCY);
+    const suspect = plan.vacant - unsold - unbuildable;
     const flag = city.lots.filter((l) => l.isFlagLot).length;
     const lotsPerBlock = new Map<number, number>();
     for (const l of city.lots) lotsPerBlock.set(l.blockId, (lotsPerBlock.get(l.blockId) ?? 0) + 1);
@@ -111,8 +116,9 @@ describe('city statistics', () => {
         `lot area:   p10=${q(0.1)} p50=${q(0.5)} p90=${q(0.9)} max=${areas[areas.length - 1]?.toFixed(0)}`,
         `clusters:   ${new Set(city.lots.map((l) => l.clusterId)).size}`,
         `empty lots: ${plan.vacant}/${city.lots.length}` +
-          ` (${((plan.vacant / city.lots.length) * 100).toFixed(1)}%),` +
-          ` ${unavoidable} unavoidable — ${JSON.stringify(plan.vacancyReasons)}`,
+          ` (${((plan.vacant / city.lots.length) * 100).toFixed(1)}%):` +
+          ` ${unsold} unsold, ${unbuildable} unbuildable, ${suspect} suspect` +
+          ` — ${JSON.stringify(plan.vacancyReasons)}`,
         `empty blks: ${empty.length}/${city.blocks.length} covering ${emptyArea.toFixed(0)} m²` +
           ` (largest ${Math.max(0, ...empty.map((b) => b.area)).toFixed(0)} m²)`,
         `no frontage:${noFrontage} blocks`,

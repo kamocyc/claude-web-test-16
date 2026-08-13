@@ -32,7 +32,8 @@ const OVERLAY_LAYERS: [OverlayLayer, string][] = [
   ['buildable', '建築可能領域'],
   ['footprints', 'フットプリント'],
   ['flagPoles', '旗竿地の竿'],
-  ['vacantUnavoidable', '空き地（やむを得ない）'],
+  ['vacantUnsold', '空き地（未分譲・売れ残り）'],
+  ['vacantUnbuildable', '空き地（建てられない）'],
   ['vacantAvoidable', '空き地（要調査）'],
   ['landUse', '用途（敷地の輪郭）'],
   ['useZones', '用途地域（地区の輪郭）'],
@@ -101,7 +102,8 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   fGrowth.add(params.roads.growth, 'enabled').name('成長させる（切ると一発生成）');
   fGrowth.add(params.roads.growth, 'coreLotScale', 0.5, 1.4, 0.02).name('中心部の敷地の大きさ(倍)');
   fGrowth.add(params.roads.growth, 'fringeLotScale', 0.8, 2.5, 0.02).name('外縁部の敷地の大きさ(倍)');
-  fGrowth.add(params.roads.growth, 'fringeVacancy', 0, 0.6, 0.02).name('外縁の未分譲率');
+  fGrowth.add(params.roads.growth, 'fringeVacancy', 0, 0.6, 0.02).name('新規分譲地の未分譲率');
+  fGrowth.add(params.roads.growth, 'sellOutSteps', 1, 24, 1).name('完売までの年数（成長ステップ）');
   fGrowth.add(params.roads.growth, 'fullAt', 6, 48, 1).name('市街化が完了する年齢');
   fGrowth.add(params.roads.growth, 'spreadExponent', 0.3, 1.4, 0.02).name('広がりの速さ');
   fGrowth.add(params.roads.growth, 'streetsPerStep', 2, 20, 1).name('1段階あたりの道路数');

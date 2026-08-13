@@ -17,7 +17,7 @@ import { KIND_RULES } from '../building/kinds.js';
 import { PropRegistry } from '../props/PropRegistry.js';
 import type { MaterialLibrary } from '../material/materials.js';
 import { ChunkedMeshBuilder } from './MeshMerger.js';
-import { generationAge } from '../city/RoadGrowth.js';
+import { unsoldChance } from '../city/RoadGrowth.js';
 
 export interface CityMeshResult {
   group: THREE.Group;
@@ -87,11 +87,13 @@ export function planBuildings(city: City, params: CityParams): BuildingPlan {
     // that is solid in the middle and thins toward the edge. Nothing else does
     // it as directly — lot *sizes* also grow outward, so counting parcels per
     // hectare actually reads the wrong way round without this.
-    if (growth.enabled && growth.fringeVacancy > 0) {
-      const age = generationAge(lot.generation, growth);
+    //
+    // How long the estate has been on the market, not how late it was laid out:
+    // see `unsoldChance`. A town run to the end of its clock has sold out.
+    if (growth.enabled) {
       // Its own sub-seed namespace, so changing the fringe rule cannot reshuffle
       // which roof colour every house in the town got.
-      if (makeRng(subSeed(lot.seed, 'developed')).chance(growth.fringeVacancy * age)) {
+      if (makeRng(subSeed(lot.seed, 'developed')).chance(unsoldChance(lot.generation, growth))) {
         note(lot, 'not-yet-developed');
         continue;
       }

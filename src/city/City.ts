@@ -10,7 +10,12 @@ import { subdivideBlock, type Lot } from './Lots.js';
 import { assignZoning, makeUrbanityField, type UrbanityField } from './Zoning.js';
 import { makeTerrain, type Terrain } from '../terrain/Terrain.js';
 import { makeObstacles, type ObstacleField } from '../terrain/Obstacles.js';
-import { solveRoadProfile, type RoadHeights } from './RoadProfile.js';
+import {
+  solveLaneProfiles,
+  solveRoadProfile,
+  type LaneHeights,
+  type RoadHeights,
+} from './RoadProfile.js';
 import { assignPlatforms } from './Platform.js';
 
 /** The generated city, before any geometry exists. */
@@ -22,6 +27,11 @@ export interface City {
   roads: RoadNetwork;
   /** Design height of every road node. Zero everywhere on flat ground. */
   roadHeights: RoadHeights;
+  /**
+   * Design height along every 私道. Solved after the lots, because that is when
+   * the lanes exist — they are cut by the subdivider, not by the road generator.
+   */
+  laneHeights: LaneHeights;
   blocks: Block[];
   lots: Lot[];
   urbanity: UrbanityField;
@@ -72,7 +82,15 @@ export function generateCity(params: CityParams): City {
   });
 
   clock('zoning', () => assignZoning(lots, extraction.blocks, urbanity, params));
-  clock('platforms', () => assignPlatforms(lots, roads, terrain, roadHeights, params.platform));
+  // The lanes only exist once the blocks have been subdivided, so their profile
+  // is solved here rather than beside the road one — and before the platforms,
+  // which level a lot fronting a lane to the lane.
+  const laneHeights = clock('lanes', () =>
+    solveLaneProfiles(roads, terrain, roadHeights, params.roads),
+  );
+  clock('platforms', () =>
+    assignPlatforms(lots, roads, terrain, roadHeights, laneHeights, params.platform),
+  );
 
   return {
     params,
@@ -80,6 +98,7 @@ export function generateCity(params: CityParams): City {
     obstacles,
     roads,
     roadHeights,
+    laneHeights,
     blocks: extraction.blocks,
     lots,
     urbanity,

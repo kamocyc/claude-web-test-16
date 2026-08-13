@@ -92,17 +92,24 @@ const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }
     counts:
       '{"house":217,"apart":107,"mansion":35,"factory":2,"vacant":10,"konbini":2,"zakkyo":16,"shophouse":2}',
   },
+  // The two grown cases were re-recorded once more, when whether a plot had sold
+  // stopped being read off the generation alone and started counting the steps
+  // *since* (`unsoldChance`). Only these two move — the three above have growth
+  // switched off — and within them only the vacancy: `vacant` falls from 65 to 28
+  // and from 36 to 10, and every lot those plots turn into is a kind that was
+  // already in the same counts. No lot boundary moved, which is the claim worth
+  // making about a change to a sales rule.
   'sakura-3/district/land': {
-    lots: 2381816926,
-    buildings: 2651365310,
+    lots: 1744482557,
+    buildings: 2940000092,
     counts:
-      '{"house":160,"apart":71,"vacant":65,"mansion":23,"zakkyo":7,"konbini":3,"shophouse":1,"warehouse":2,"factory":4}',
+      '{"house":187,"apart":78,"vacant":28,"mansion":23,"zakkyo":7,"konbini":3,"shophouse":3,"factory":5,"warehouse":2}',
   },
   'kaede-11/district/land': {
-    lots: 4004031399,
-    buildings: 899423456,
+    lots: 1587084766,
+    buildings: 3855212165,
     counts:
-      '{"house":133,"apart":74,"vacant":36,"mansion":17,"konbini":4,"warehouse":5,"factory":3,"shophouse":12,"zakkyo":7}',
+      '{"house":148,"apart":79,"mansion":19,"konbini":4,"vacant":10,"warehouse":6,"factory":4,"shophouse":12,"zakkyo":9}',
   },
 };
 

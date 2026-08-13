@@ -146,6 +146,146 @@ export function solveRoadProfile(net: RoadNetwork, terrain: Terrain, p: RoadPara
   };
 }
 
+/**
+ * The design height of every 私道, station by station.
+ *
+ * A private lane has no node in the road graph, so `solveRoadProfile` never sees
+ * it and it had no profile at all: both ends were given the height of whatever
+ * road happened to be within 40 m and the asphalt was drawn as one flat plane
+ * between them. Across a block on a slope that borrows a height from the street
+ * on the *far* side — measured on the default seed, 34 of 47 lanes ran more than
+ * a metre under the land they cross and the worst was seven metres down, which is
+ * to say the alley was inside the hill.
+ *
+ * A lane is not graded like a street, and this is not the street solver with
+ * different weights. Nobody brought a bulldozer for a 私道: it follows the ground,
+ * lifting off it only at the end where it has to meet the street it opens off,
+ * and only over the few metres that takes.
+ */
+
+/** One private lane's profile: heights at evenly spaced stations along it. */
+export interface LaneProfile {
+  points: Vec2[];
+  heights: number[];
+  width: number;
+}
+
+export interface LaneHeights {
+  /** One profile per entry of `RoadNetwork.privateLanes`, in the same order. */
+  readonly profiles: LaneProfile[];
+  /** Design height at the nearest point of any lane, or null if none is near. */
+  nearestLaneHeight(p: Vec2, within: number): number | null;
+}
+
+/** Station spacing along a lane, metres. Fine enough to follow a hillside. */
+const LANE_STATION = 4;
+/**
+ * How far from a lane end to look for the street it opens off.
+ *
+ * Short on purpose. The old 40 m search is exactly what put a lane at the height
+ * of the road on the other side of the block; a lane is trimmed about 5 m back
+ * from the carriageway it meets, so anything past a dozen metres is a different
+ * street and not this lane's business.
+ */
+const LANE_ANCHOR_SEARCH = 12;
+/** Over what distance along the lane the street's height gives way to the land. */
+const LANE_ANCHOR_BLEND = 14;
+
+export function solveLaneProfiles(
+  net: RoadNetwork,
+  terrain: Terrain,
+  heights: RoadHeights,
+  p: RoadParams,
+): LaneHeights {
+  const flat = heights.flat;
+  const profiles: LaneProfile[] = [];
+
+  for (const lane of net.privateLanes) {
+    const len = V.dist(lane.a, lane.b);
+    const n = Math.max(1, Math.round(len / LANE_STATION));
+    const points: Vec2[] = [];
+    for (let i = 0; i <= n; i++) points.push(V.lerp(lane.a, lane.b, i / n));
+
+    if (flat) {
+      profiles.push({ points, heights: points.map(() => 0), width: lane.width });
+      continue;
+    }
+
+    // Where the lane meets a street, it is at the street's height — that is the
+    // one place a 私道 is not free to follow the ground.
+    const anchors: { at: number; y: number }[] = [];
+    for (const [end, at] of [
+      [lane.a, 0],
+      [lane.b, n],
+    ] as const) {
+      const y = heights.nearestRoadHeight(end, LANE_ANCHOR_SEARCH);
+      if (y !== null) anchors.push({ at, y });
+    }
+
+    // What the lane is trying to be: the land, pulled to the street over the
+    // first few metres at each end that has one.
+    const step = len / n;
+    const target = points.map((q, i) => {
+      const ground = terrain.heightAtXY(q.x, q.y);
+      let w = 0;
+      let ay = ground;
+      for (const a of anchors) {
+        const t = Math.min(1, (Math.abs(i - a.at) * step) / LANE_ANCHOR_BLEND);
+        const wi = 1 - t * t * (3 - 2 * t);
+        if (wi > w) {
+          w = wi;
+          ay = a.y;
+        }
+      }
+      return ground * (1 - w) + ay * w;
+    });
+
+    // The same relaxation as the street solver, at the private smoothing — a
+    // touch of averaging so the fBm's own ripple does not end up as a washboard,
+    // and a gradient clamp so a lane up a scarp is still a lane.
+    const h = [...target];
+    const limit = p.growth.maxGradient.private * step;
+    for (let sweep = 0; sweep < p.growth.profileRelaxIterations; sweep++) {
+      for (let i = 0; i <= n; i++) {
+        const smoothed = ((h[i - 1] ?? h[i]!) + (h[i + 1] ?? h[i]!)) / 2;
+        const k = SMOOTHING.private;
+        h[i] = h[i]! * (1 - k) + smoothed * k * 0.85 + (target[i]! - h[i]!) * k * 0.15;
+      }
+      for (const a of anchors) h[a.at] = a.y;
+      for (let i = 0; i < n; i++) {
+        const diff = h[i + 1]! - h[i]!;
+        const over = Math.abs(diff) - limit;
+        if (over <= 0) continue;
+        const fix = (over / 2) * Math.sign(diff);
+        h[i] = h[i]! + fix;
+        h[i + 1] = h[i + 1]! - fix;
+      }
+    }
+
+    profiles.push({ points, heights: h, width: lane.width });
+  }
+
+  return {
+    profiles,
+    nearestLaneHeight(q, within) {
+      let bestD = within;
+      let bestH: number | null = null;
+      for (const prof of profiles) {
+        for (let i = 0; i + 1 < prof.points.length; i++) {
+          const a = prof.points[i]!;
+          const b = prof.points[i + 1]!;
+          const c = V.closestOnSegment(q, a, b);
+          const d = V.dist(q, c.point);
+          if (d >= bestD) continue;
+          bestD = d;
+          bestH = prof.heights[i]! + (prof.heights[i + 1]! - prof.heights[i]!) * c.t;
+        }
+      }
+      return bestH;
+    },
+  };
+}
+
 export interface GradeViolation {
   edge: number;
   cls: RoadClass;

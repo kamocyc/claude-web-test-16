@@ -222,8 +222,20 @@ export interface GrowthParams {
   maxBridgeSpan: number;
   /** A road may only bridge the river if it crosses it more squarely than this. */
   minRiverCrossAngle: number;
-  /** Share of the newest generation's lots left undeveloped. */
+  /** Share of a brand-new 分譲地's lots that have not sold yet. */
   fringeVacancy: number;
+  /**
+   * How many growth steps a new 分譲地 takes to sell out.
+   *
+   * This is what makes unsold land a *stage* rather than a permanent property of
+   * the outer districts. The share was keyed on the generation alone — how late
+   * the estate was laid out — which does not mention the present at all: a town
+   * aged to the end of the slider had exactly the vacancy of one caught halfway,
+   * because the fringe of a finished town was still being read as new. Keyed on
+   * the time since, an estate fills in as the town goes on growing, and a town
+   * grown to the top of the range has sold out.
+   */
+  sellOutSteps: number;
   /** Gauss–Seidel sweeps in the road profile solver. Fixed, so it stays deterministic. */
   profileRelaxIterations: number;
   // --- Candidate cost weights ----------------------------------------------
@@ -619,6 +631,7 @@ export const DEFAULT_GROWTH: GrowthParams = {
   maxBridgeSpan: 45,
   minRiverCrossAngle: 45,
   fringeVacancy: 0.25,
+  sellOutSteps: 12,
   profileRelaxIterations: 20,
   slopeWeight: 1.4,
   cutFillWeight: 1.0,

@@ -361,6 +361,33 @@ export const generationAge = (gen: number, g: GrowthParams): number =>
   Math.min(1, Math.max(0, gen / Math.max(1, g.fullAt - 1)));
 
 /**
+ * The chance a plot of generation `gen` has not been sold yet.
+ *
+ * Deliberately not `generationAge`. That answers "what standard was this built
+ * to", which is a fact about the past and rightly ignores the present — a 1970s
+ * estate has 1970s plots in 2020. Whether those plots have *sold* is the
+ * opposite kind of question: it is about now, and the answer changes while
+ * nothing on the ground does.
+ *
+ * Keying the share on the generation alone conflated the two, and the symptom
+ * was that the town's one headline control did nothing to it. `steps` is a
+ * clock; running it to the end of the range is supposed to give a town that has
+ * finished growing, and that town still had a quarter of its outer plots
+ * standing empty — the fringe read as new when it had been there for fifteen
+ * years. Measured against the time since instead, an estate sells out over
+ * `sellOutSteps` and a fully grown town has no unsold land left.
+ *
+ * Nothing here moves a road or a boundary: ageing the town sells plots, it does
+ * not redraw the place they are in.
+ */
+export function unsoldChance(gen: number, g: GrowthParams): number {
+  if (g.fringeVacancy <= 0) return 0;
+  const elapsed = Math.max(0, g.steps - 1 - gen);
+  const fresh = 1 - elapsed / Math.max(1, g.sellOutSteps);
+  return fresh <= 0 ? 0 : g.fringeVacancy * fresh;
+}
+
+/**
  * The station: the flattest buildable spot near the middle of the town.
  *
  * Not a random point on a random arterial. A station goes where a line could be

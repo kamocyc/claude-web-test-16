@@ -6,6 +6,8 @@ import { describeGradeViolation, gradeViolations } from '../src/city/RoadProfile
 import { intersectPoly } from '../src/geom/boolean.js';
 import { area } from '../src/geom/polygon.js';
 import * as V from '../src/geom/vec2.js';
+import { gradeGround } from '../src/terrain/Graded.js';
+import type { Vec2 } from '../src/core/types.js';
 
 /**
  * What the land is allowed to do to the town.
@@ -123,6 +125,103 @@ describe('the river', () => {
       expect(crossings.slice(0, 5), `${crossings.length} un-bridged crossings`).toEqual([]);
     });
   }
+});
+
+/**
+ * Every carriageway is visible.
+ *
+ * Measured against the ground that is actually *drawn* — `gradeGround`, not the
+ * natural heightfield — because being buried is a fact about the triangles, and
+ * a road is allowed to sit metres under the land it crosses as long as the town
+ * dug the land out of the way first. Roads have always been graded and lanes
+ * never were: a 私道 had no profile at all, took both ends from whatever street
+ * was within 40 m, and was drawn as one flat plane between them, so on a slope
+ * it borrowed a height from the street on the far side of the block and vanished
+ * into the hill. On the default seed 34 of 47 lanes ran more than a metre under
+ * the land and the worst was seven metres down.
+ */
+function burial(city: ReturnType<typeof generateCity>): string[] {
+  const graded = gradeGround(city);
+  if (!graded) return [];
+  const out: string[] = [];
+  const at = (q: { x: number; y: number }) => `(${q.x.toFixed(0)}, ${q.y.toFixed(0)})`;
+
+  /** Deepest burial anywhere across the width of one straight piece of road. */
+  const check = (a: Vec2, b: Vec2, width: number, ya: number, yb: number): number => {
+    const len = V.dist(a, b);
+    if (len < 0.5) return 0;
+    const n = V.perp(V.scale(V.sub(b, a), 1 / len));
+    let worst = 0;
+    for (let i = 0; i <= 8; i++) {
+      const t = i / 8;
+      const c = V.lerp(a, b, t);
+      const y = ya + (yb - ya) * t;
+      // Across the carriageway only, not out to the kerb: the outermost
+      // centimetres are where the earthworks quad takes over.
+      for (const off of [-0.4, -0.2, 0, 0.2, 0.4]) {
+        worst = Math.max(worst, graded.heightAt(V.addScaled(c, n, off * width)) - y);
+      }
+    }
+    return worst;
+  };
+
+  for (const e of city.roads.edges) {
+    const a = city.roads.graph.node(e.a).p;
+    const b = city.roads.graph.node(e.b).p;
+    const d = check(a, b, e.width, city.roadHeights.at(e.a), city.roadHeights.at(e.b));
+    if (d > 1) out.push(`${e.cls} ${at(a)}–${at(b)}: ${d.toFixed(1)} m of ground over it`);
+  }
+  for (const prof of city.laneHeights.profiles) {
+    let worst = 0;
+    for (let i = 0; i + 1 < prof.points.length; i++) {
+      const d = check(
+        prof.points[i]!,
+        prof.points[i + 1]!,
+        prof.width,
+        prof.heights[i]!,
+        prof.heights[i + 1]!,
+      );
+      worst = Math.max(worst, d);
+    }
+    if (worst > 1) {
+      out.push(`私道 ${at(prof.points[0]!)}: ${worst.toFixed(1)} m of ground over it`);
+    }
+  }
+  return out;
+}
+
+describe('buried roads', () => {
+  for (const seed of ['slope-1', 'slope-2']) {
+    it(`no road or lane is under the ground that is drawn (${seed})`, () => {
+      const { city } = town(seed, 'district');
+      // The town is on a hillside and its lanes exist — an assertion that none
+      // of them is buried says nothing if there is nothing to bury.
+      expect(city.laneHeights.profiles.length, 'no private lanes in this town').toBeGreaterThan(5);
+      const bad = burial(city);
+      expect(bad.slice(0, 5), `${bad.length} buried carriageways`).toEqual([]);
+    });
+  }
+
+  it('a lane follows the land it crosses', () => {
+    // The other half of the claim: a 私道 is not graded like a street. Away from
+    // the junction where it has to meet the road, it should be on the ground —
+    // if it is not, it is a street with a different name and the burial test
+    // above could be passed by simply excavating the whole block.
+    const { city } = town('slope-1', 'district');
+    let onGround = 0;
+    let total = 0;
+    for (const prof of city.laneHeights.profiles) {
+      const n = prof.points.length - 1;
+      // Skip the first and last few stations: that is the blend onto the street.
+      for (let i = 4; i <= n - 4; i++) {
+        total++;
+        const d = Math.abs(city.terrain.heightAt(prof.points[i]!) - prof.heights[i]!);
+        if (d < 1) onGround++;
+      }
+    }
+    expect(total, 'no lane long enough to measure').toBeGreaterThan(30);
+    expect(onGround / total, 'lanes are graded like streets').toBeGreaterThan(0.7);
+  });
 });
 
 describe('platforms', () => {

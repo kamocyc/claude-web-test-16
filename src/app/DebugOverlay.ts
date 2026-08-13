@@ -5,7 +5,7 @@ import type { UseZone } from '../core/params.js';
 import type { City } from '../city/City.js';
 import { contourSegments } from '../terrain/heightfield.js';
 import type { LotKind } from '../city/Lots.js';
-import { UNAVOIDABLE_VACANCY } from '../building/types.js';
+import { UNBUILDABLE_VACANCY, UNSOLD_VACANCY, type VacancyReason } from '../building/types.js';
 
 /**
  * Line overlays for every intermediate stage. The lot and frontage layers are
@@ -21,7 +21,8 @@ export type OverlayLayer =
   | 'buildable'
   | 'footprints'
   | 'flagPoles'
-  | 'vacantUnavoidable'
+  | 'vacantUnsold'
+  | 'vacantUnbuildable'
   | 'vacantAvoidable'
   | 'landUse'
   | 'useZones'
@@ -39,9 +40,11 @@ const COLORS: Record<OverlayLayer, number> = {
   buildable: 0xb07cff,
   footprints: 0xffffff,
   flagPoles: 0xff9f43,
-  // Two colours, because the distinction is the whole point: grey is a scrap of
-  // land nothing belongs on, red is a lot the generator failed to use.
-  vacantUnavoidable: 0x9aa0a6,
+  // Three colours, because the distinctions are the whole point: sand is a plot
+  // that has not sold yet and will, grey is a scrap of land nothing belongs on
+  // ever, red is a lot the generator failed to use.
+  vacantUnsold: 0xd9a441,
+  vacantUnbuildable: 0x9aa0a6,
   vacantAvoidable: 0xff2d55,
   // Legend colour only; these four are drawn per vertex.
   landUse: 0x63e08a,
@@ -92,7 +95,8 @@ const HEIGHTS: Record<OverlayLayer, number> = {
   buildable: 0.55,
   footprints: 0.6,
   flagPoles: 0.5,
-  vacantUnavoidable: 0.65,
+  vacantUnsold: 0.64,
+  vacantUnbuildable: 0.65,
   vacantAvoidable: 0.66,
   landUse: 0.47,
   useZones: 0.3,
@@ -184,23 +188,28 @@ export class DebugOverlay {
     this.addLayer('buildable', ringSegments(extra.buildable ?? [], HEIGHTS.buildable));
     this.addLayer('footprints', ringSegments(extra.footprints ?? [], HEIGHTS.footprints));
 
-    // Empty lots, split by whether anything could have been done about it. A
-    // lot with no building used to be indistinguishable from ordinary ground —
-    // you could see the hole in the block but not why it was there, or even
-    // whether the generator knew.
+    // Empty lots, in three layers rather than two. A lot with no building used
+    // to be indistinguishable from ordinary ground — you could see the hole in
+    // the block but not why it was there, or even whether the generator knew.
+    // Two layers were then not enough either: "unavoidable" put the plot that
+    // has not sold yet and the sliver no house could ever stand on under one
+    // colour, and they are opposite facts. One of them fills in when the town
+    // gets older, and looking at the overlay you could not tell which lots.
     const vacant = city.lots.filter((l) => l.kind === 'vacant');
-    const unavoidable = vacant.filter(
-      (l) => l.vacancyReason !== null && UNAVOIDABLE_VACANCY.includes(l.vacancyReason),
+    const inGroup = (l: (typeof vacant)[number], group: readonly VacancyReason[]): boolean =>
+      l.vacancyReason !== null && group.includes(l.vacancyReason);
+    const unsold = vacant.filter((l) => inGroup(l, UNSOLD_VACANCY));
+    const unbuildable = vacant.filter((l) => inGroup(l, UNBUILDABLE_VACANCY));
+    const avoidable = vacant.filter(
+      (l) => !inGroup(l, UNSOLD_VACANCY) && !inGroup(l, UNBUILDABLE_VACANCY),
     );
-    const avoidable = vacant.filter((l) => !unavoidable.includes(l));
-    this.addLayer(
-      'vacantUnavoidable',
-      crossedRings(unavoidable.map((l) => l.polygon), HEIGHTS.vacantUnavoidable),
-    );
-    this.addLayer(
-      'vacantAvoidable',
-      crossedRings(avoidable.map((l) => l.polygon), HEIGHTS.vacantAvoidable),
-    );
+    for (const [layer, lots] of [
+      ['vacantUnsold', unsold],
+      ['vacantUnbuildable', unbuildable],
+      ['vacantAvoidable', avoidable],
+    ] as const) {
+      this.addLayer(layer, crossedRings(lots.map((l) => l.polygon), HEIGHTS[layer]));
+    }
 
     // Land use, coloured per ring rather than per layer. Judging whether the
     // zoning worked from the finished buildings is as hopeless as judging
