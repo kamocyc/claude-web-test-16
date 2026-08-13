@@ -168,13 +168,23 @@ export function buildGround(
       end: (degree.get(e.b) ?? 0) > 1,
     });
   }
-  for (const lane of city.roads.privateLanes) {
-    // A 私道 has no node in the road graph and therefore no solved profile. It
-    // takes its ends from whatever the network nearby is doing, which is what
-    // actually happens: the lane was graded to meet the street it opens off.
-    const ya = heights.nearestRoadHeight(lane.a, 40) ?? terrain.heightAt(lane.a);
-    const yb = heights.nearestRoadHeight(lane.b, 40) ?? terrain.heightAt(lane.b);
-    addRibbon(lane.a, lane.b, lane.width, ya, yb, { start: false, end: false });
+  // A 私道 is drawn station by station rather than as one plane between its ends.
+  // It has no node in the road graph, so it is not in the profile solve with the
+  // streets; `solveLaneProfiles` gives it one of its own, and the whole point of
+  // that profile is that it follows the land — which one flat quad cannot do.
+  // Consecutive stations are collinear and share their end heights exactly, so
+  // the pieces meet without the junction overshoot a corner needs.
+  for (const prof of city.laneHeights.profiles) {
+    for (let i = 0; i + 1 < prof.points.length; i++) {
+      addRibbon(
+        prof.points[i]!,
+        prof.points[i + 1]!,
+        prof.width,
+        prof.heights[i]!,
+        prof.heights[i + 1]!,
+        { start: false, end: false },
+      );
+    }
   }
 
   buildLotSurfaces(buildings, asphalt, kerb);
