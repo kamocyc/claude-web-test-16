@@ -3,6 +3,7 @@ import { DEFAULT_PARAMS, applyRoadLayout, cloneParams } from '../src/core/params
 import { generateCity } from '../src/city/City.js';
 import { planBuildings } from '../src/build/CityMesh.js';
 import * as V from '../src/geom/vec2.js';
+import { UNBUILDABLE_VACANCY } from '../src/building/types.js';
 
 /**
  * That the town grew, rather than merely being irregular.
@@ -115,6 +116,37 @@ describe('a grown town', () => {
     const meanR = (ls: typeof undeveloped) => ls.reduce((s, l) => s + radius(l.centroid), 0) / ls.length;
     expect(meanR(undeveloped)).toBeGreaterThan(meanR(built));
   }, 60000);
+
+  it('sells the town out once it has finished growing', () => {
+    // The other half of "part-sold", and the half that was missing. Unsold land
+    // was keyed on the *generation* — how late the estate was laid out — which
+    // never mentions the present, so a town run to the end of its clock had
+    // exactly the vacancy of one caught halfway through. The fringe of a
+    // finished town read as brand new for ever.
+    //
+    // 40 is the top of the age slider in `app/DebugUI.ts`. Nothing about the
+    // rule is special there; it is simply the oldest town the UI can ask for,
+    // and by then every estate has been on the market far longer than
+    // `sellOutSteps`.
+    const extent = DEFAULT_PARAMS.roads.extent;
+    const young = grown('grow-1', 16, extent);
+    const finished = grown('grow-1', 40, extent);
+    const unsold = (t: typeof young) =>
+      planBuildings(t.city, t.params).vacancyReasons['not-yet-developed'] ?? 0;
+
+    expect(unsold(young), 'a growing town has plots still on the market').toBeGreaterThan(20);
+    expect(unsold(finished), 'a finished town still has unsold plots').toBe(0);
+
+    // What is left standing empty in the finished town is land no house could
+    // use — and there is some, or this assertion would be passing by accident on
+    // a town with no awkward parcels in it at all.
+    const empty = finished.city.lots.filter((l) => l.kind === 'vacant');
+    expect(empty.length, 'no vacancy at all to classify').toBeGreaterThan(0);
+    expect(
+      empty.filter((l) => !UNBUILDABLE_VACANCY.includes(l.vacancyReason!)),
+      'a finished town has vacancy that is neither sold nor unbuildable',
+    ).toEqual([]);
+  }, 180000);
 
   it('an older town is a superset of a younger one', () => {
     // The definition of growth, and the one invariant that separates it from

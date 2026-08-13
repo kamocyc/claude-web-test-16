@@ -167,11 +167,29 @@ export type VacancyReason =
    */
   | 'not-yet-developed';
 
+/**
+ * Land nobody has bought yet.
+ *
+ * Counted apart from `UNBUILDABLE_VACANCY` because the two are different facts
+ * about a town and one of them moves. An unsold plot is sound land waiting for a
+ * buyer — age the town and it will be built on — while a lot that is too narrow
+ * for a house will never be anything else however long you wait. Summing them
+ * into one "unavoidable" figure hid that: the honest reading of the default town
+ * is 4% land that cannot be built on and a fringe that has not sold out, and the
+ * single number said neither.
+ */
+export const UNSOLD_VACANCY: readonly VacancyReason[] = ['not-yet-developed'];
+
 /** Reasons that represent land genuinely not worth building on. */
-export const UNAVOIDABLE_VACANCY: readonly VacancyReason[] = [
+export const UNBUILDABLE_VACANCY: readonly VacancyReason[] = [
   'too-narrow',
   'buildable-too-small',
-  'not-yet-developed',
+];
+
+/** Every vacancy that is not a failure of the generator. */
+export const UNAVOIDABLE_VACANCY: readonly VacancyReason[] = [
+  ...UNBUILDABLE_VACANCY,
+  ...UNSOLD_VACANCY,
 ];
 
 export interface BuildEnvelope {
