@@ -121,8 +121,16 @@ describe('block efficiency', () => {
       }
 
       const used = sold / usable;
+      // 0.88, raised from 0.82 once the land the subdivider was quietly
+      // discarding was found and given to somebody: the double setback around
+      // an internal 私道, the core dropped on a coin flip, and the parcel
+      // deleted for where its centroid fell relative to a 段丘崖. It measures
+      // 0.91 on the district layout and 0.98 on the grid; the floor is set
+      // below the worse of the two with room for seed-to-seed movement.
+      // `test/landloss.test.ts` is where the same land is accounted for by
+      // reason rather than in one ratio.
       expect(used, `${(used * 100).toFixed(1)}% of the buildable land in blocks became lots`)
-        .toBeGreaterThan(0.82);
+        .toBeGreaterThan(0.88);
     }, 120000);
   }
 });

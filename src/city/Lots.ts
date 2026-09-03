@@ -296,6 +296,10 @@ function subdivideInterior(
   }
   const core = coreParts.length > 0 ? largest(coreParts) : null;
   const coreArea = core ? area(core) : 0;
+  // Not always one piece: a bent block can leave the land behind its rows in
+  // two. Only the largest drives the lane-or-flags decision; the rest go
+  // straight to the street row like any other leftover.
+  const strandedCore = core ? coreParts.filter((q) => q !== core) : [];
 
   // Strips: the part of `inner` within the row depth of each frontage edge, with
   // earlier strips subtracted so corners are not claimed twice.
@@ -397,7 +401,7 @@ function subdivideInterior(
   // keeps `ZONE_LOTS.industrial`, which sets the chance to zero because a
   // 工業団地 is a grid of large parcels and not a warren: it now gets deeper
   // parcels rather than gaps.
-  const leftovers: Polygon[] = [];
+  const leftovers: Polygon[] = [...strandedCore];
   if (core && !laneBuilt) {
     if (coreArea >= cfg.flagLotMinCore && preferFlags) {
       const flags = makeFlagLots(core, inner, ordered, cfg, rng, loss);
@@ -818,6 +822,17 @@ function absorbIntoRow(piece: Polygon, strips: { poly: Polygon; front: FrontRef 
   return false;
 }
 
+/**
+ * How many splits each recursive splitter is allowed before it gives up.
+ *
+ * Named, and paired below with a record of whatever is still on the stack when
+ * they run out. A bare `guard++ < 24` that trips drops every polygon left in
+ * the queue, which is the one kind of lost land invisible even to a reason
+ * code: nobody decided anything, the loop simply stopped.
+ */
+const FLAG_SPLIT_GUARD = 24;
+const RESLICE_GUARD = 40;
+
 /** Recursive minimum-area split of the core into flag-lot-sized parcels. */
 function splitCoreForFlags(
   core: Polygon,
@@ -830,7 +845,7 @@ function splitCoreForFlags(
   const stack: Polygon[] = [core];
   let guard = 0;
 
-  while (stack.length > 0 && guard++ < 24) {
+  while (stack.length > 0 && guard++ < FLAG_SPLIT_GUARD) {
     const p = stack.pop()!;
     const a = area(p);
     if (a <= target * 1.5 || a < cfg.minLotArea * 2) {
@@ -848,21 +863,34 @@ function splitCoreForFlags(
     }
     stack.push(...left, ...right);
   }
+  for (const p of stack) loss.losses.add('offcut-too-small', p, loss.blockId);
   return out;
 }
 
-/** Repeatedly halve an oversized parcel across its longest extent. */
+/**
+ * Repeatedly halve an oversized parcel until every piece is within the cap.
+ *
+ * Split **across the frontage** where the parcel has one: the cut line runs
+ * from the street into the block, so every piece keeps a share of the street.
+ * Splitting on the oriented bounding box instead — which is what this did, and
+ * still does for a parcel with no frontage to preserve — cuts a *deep* parcel
+ * parallel to its own street, and the rear half is then landlocked and dies in
+ * `accept` for want of frontage with no more explanation than that. Deep
+ * parcels are exactly what the block core is absorbed into, so this went from a
+ * rare accident to the largest single kind of lost land in the town.
+ */
 function resliceOversized(
   poly: Polygon,
   cap: number,
   cfg: LotParams,
   loss: LossCtx = NO_LOSSES,
+  outward?: Vec2,
 ): Polygon[] {
   const out: Polygon[] = [];
   const stack: Polygon[] = [poly];
   let guard = 0;
 
-  while (stack.length > 0 && guard++ < 40) {
+  while (stack.length > 0 && guard++ < RESLICE_GUARD) {
     const p = stack.pop()!;
     const a = area(p);
     if (a <= cap || a < cfg.minLotArea * 2) {
@@ -870,10 +898,15 @@ function resliceOversized(
       else loss.losses.add('offcut-too-small', p, loss.blockId);
       continue;
     }
-    // Split perpendicular to the widest direction of the oriented bounding box.
-    const obb = minAreaObb(p);
-    const acrossLong = obb.rect.w >= obb.rect.d ? V.perp(obb.frame.xAxis) : obb.frame.xAxis;
-    const [left, right] = splitPolygonByLine(p, centroid(p), acrossLong);
+    // Along the street's outward normal where there is one, so the cut runs from
+    // the street into the block; otherwise perpendicular to the widest direction
+    // of the oriented bounding box, which keeps the pieces compact.
+    let cutDir = outward;
+    if (!cutDir) {
+      const obb = minAreaObb(p);
+      cutDir = obb.rect.w >= obb.rect.d ? V.perp(obb.frame.xAxis) : obb.frame.xAxis;
+    }
+    const [left, right] = splitPolygonByLine(p, centroid(p), cutDir);
     if (left.length === 0 || right.length === 0) {
       if (a >= cfg.minLotArea) out.push(p);
       else loss.losses.add('offcut-too-small', p, loss.blockId);
@@ -881,6 +914,7 @@ function resliceOversized(
     }
     stack.push(...left, ...right);
   }
+  for (const p of stack) loss.losses.add('offcut-too-small', p, loss.blockId);
   return out;
 }
 
@@ -1083,7 +1117,7 @@ function finaliseLots(
     // strip that failed to slice cleanly survives as a single implausible
     // half-block lot.
     if (a > cap && !p.isFlagLot && depth < 3) {
-      for (const piece of resliceOversized(cleaned, cap, cfg, loss)) {
+      for (const piece of resliceOversized(cleaned, cap, cfg, loss, frontages[0]!.outward)) {
         accept({ ...p, polygon: piece }, depth + 1);
       }
       return;
