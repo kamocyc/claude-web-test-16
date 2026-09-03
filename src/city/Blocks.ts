@@ -12,7 +12,7 @@ import { cleanPolygon } from '../geom/simplify.js';
 import { differencePoly, unionPoly } from '../geom/boolean.js';
 import { extractFaces, findSpurs } from '../geom/planarGraph.js';
 import { minAreaObb } from '../geom/obb.js';
-import { clipHalfPlane, splitPolygonByLine } from '../geom/halfplane.js';
+import { splitPolygonByLine } from '../geom/halfplane.js';
 import type { UseZone } from '../core/params.js';
 import type { ObstacleField } from '../terrain/Obstacles.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
@@ -308,27 +308,33 @@ function splitOversized(
       lanes.push(record);
     }
 
-    // Both halves lose the road's right of way.
+    // The halves are pushed as they come off the cut, with nothing taken off
+    // them for the new street.
+    //
+    // They used to lose 3 m each. Everywhere else in this generator a block
+    // face is bounded by road *centrelines* — that is why `Lots` sets every
+    // frontage back by half a carriageway plus a gutter — and a lane driven
+    // through an oversized block is a road like any other, so the cut line is a
+    // centreline too. Clipping here as well meant the same right of way was
+    // subtracted twice: the block edge sat 3 m off the lane, `attributeEdges`
+    // tagged it with the lane all the same, and `Lots` took another
+    // `5/2 + 0.5` off it. Lot lines ended up 6 m from 2.5 m of asphalt, and the
+    // 3 m of nobody's land on each side was the strip of nothing running down
+    // the middle of every large block.
+    //
+    // It also cost land where there was no street at all. When the cut could
+    // not be clipped to the block, or `trimLaneEnds` pulled it back to nothing,
+    // no lane was registered — and the halves were clipped anyway, leaving a
+    // 6 m gap with no road in it. Both halves now meet along the cut, and the
+    // setback happens once, downstream, only where a lane really runs.
     for (const side of [left, right]) {
       for (const piece of side) {
-        const trimmed = clipHalfPlane(piece, {
-          origin: V.addScaled(c, V.perp(cutDir), inwardSign(piece, c, cutDir) * 3),
-          normal: V.scale(V.perp(cutDir), inwardSign(piece, c, cutDir)),
-        });
-        for (const t of trimmed) {
-          const cleaned = cleanPolygon(t, { tolerance: 0.05, minEdge: 0.3, minArea: 1 });
-          if (cleaned) queue.push(cleaned);
-        }
+        const cleaned = cleanPolygon(piece, { tolerance: 0.05, minEdge: 0.3, minArea: 1 });
+        if (cleaned) queue.push(cleaned);
       }
     }
   }
   return { pieces: out, lanes };
-}
-
-/** Which side of the cut line a piece lies on: +1 or -1. */
-function inwardSign(piece: Polygon, origin: Vec2, cutDir: Vec2): number {
-  const n = V.perp(cutDir);
-  return V.dot(V.sub(centroid(piece), origin), n) >= 0 ? 1 : -1;
 }
 
 /**
