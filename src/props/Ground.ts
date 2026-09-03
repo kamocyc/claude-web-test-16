@@ -8,6 +8,7 @@ import type { City } from '../city/City.js';
 import type { BuiltBuilding } from '../building/Builder.js';
 import { KIND_RULES } from '../building/kinds.js';
 import { buildTerrainMesh } from '../terrain/GroundMesh.js';
+import { JUNCTION_OVERSHOOT, drawnHalfWidth, nodeDegrees } from '../city/RoadSurface.js';
 import { gradeGround } from '../terrain/Graded.js';
 import type { Terrain } from '../terrain/Terrain.js';
 
@@ -99,8 +100,11 @@ export function buildGround(
     if (l < 0.2) return;
     const dir = V.scale(d, 1 / l);
     const n = V.perp(dir);
-    const half = width / 2;
-    const over = half * 0.9;
+    // Both numbers come from `city/RoadSurface.ts`, which is what the lot
+    // subdivider, the debug overlay and the tests measure against. They used to
+    // be written out here and copied into four other files.
+    const half = drawnHalfWidth(width);
+    const over = half * JUNCTION_OVERSHOOT;
     const a2 = V.addScaled(a, dir, extend.start ? -over : 0);
     const b2 = V.addScaled(b, dir, extend.end ? over : 0);
 
@@ -150,11 +154,7 @@ export function buildGround(
 
   // How many roads meet at each node, so a ribbon knows whether there is
   // anything at its end to close the gap against.
-  const degree = new Map<number, number>();
-  for (const e of city.roads.edges) {
-    degree.set(e.a, (degree.get(e.a) ?? 0) + 1);
-    degree.set(e.b, (degree.get(e.b) ?? 0) + 1);
-  }
+  const degree = nodeDegrees(city.roads);
 
   for (const e of city.roads.edges) {
     const a = city.roads.graph.node(e.a).p;

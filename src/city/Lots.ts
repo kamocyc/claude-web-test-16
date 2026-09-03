@@ -22,6 +22,7 @@ import { zoneLotParams } from './LandUse.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
 import type { BuildingKind, VacancyReason } from '../building/types.js';
 import { laneClears } from './RoadClearance.js';
+import { rightOfWayHalfWidth, rightOfWayStrip } from './RoadSurface.js';
 
 /**
  * Lot subdivision — the crux of the whole generator. Everything downstream
@@ -131,6 +132,9 @@ interface FrontRef {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+/** See `clipToRoads`: how far the safety-net strip is pulled in off a lot line. */
+const COLLINEAR_SHRINK = 0.02;
+
 export function subdivideBlock(
   block: Block,
   net: RoadNetwork,
@@ -160,16 +164,15 @@ export function subdivideBlock(
 
   for (const e of block.edges) {
     if (e.cls === null) continue;
-    const inset = e.roadWidth / 2 + cfg.gutterWidth;
-    // Overshoot the ends so strips meet cleanly at block corners.
-    const a = V.addScaled(e.a, e.dir, -inset);
-    const b = V.addScaled(e.b, e.dir, inset);
-    roadStrips.push([
-      V.addScaled(a, e.normal, -inset),
-      V.addScaled(b, e.normal, -inset),
-      V.addScaled(b, e.normal, inset),
-      V.addScaled(a, e.normal, inset),
-    ]);
+    const inset = rightOfWayHalfWidth(e.roadWidth, cfg.gutterWidth);
+    // The same rectangle the renderer draws and `clipToRoads` checks against —
+    // see `city/RoadSurface.ts`. It overshoots the ends so strips meet cleanly
+    // at block corners.
+    const strip = rightOfWayStrip(e.a, e.b, e.roadWidth, cfg.gutterWidth, 0, {
+      dir: e.dir,
+      normal: e.normal,
+    });
+    if (strip) roadStrips.push(strip);
     fronts.push({
       a: V.addScaled(e.a, e.normal, inset),
       b: V.addScaled(e.b, e.normal, inset),
@@ -186,19 +189,14 @@ export function subdivideBlock(
   // then both sides of them front lots, which is the whole point of a
   // 行き止まり: the houses along it are why it was built.
   for (const r of block.interiorRoads) {
-    const half = r.width / 2 + cfg.gutterWidth;
+    const half = rightOfWayHalfWidth(r.width, cfg.gutterWidth);
     const dir = V.normalize(V.sub(r.b, r.a));
     const side = V.perp(dir);
-    // Extended at the open end only. The closed end stops where the asphalt
-    // does; running past it would take land off lots the street never reaches.
-    const a = V.addScaled(r.a, dir, -half);
-    const b = V.addScaled(r.b, dir, half);
-    roadStrips.push([
-      V.addScaled(a, side, -half),
-      V.addScaled(b, side, -half),
-      V.addScaled(b, side, half),
-      V.addScaled(a, side, half),
-    ]);
+    const strip = rightOfWayStrip(r.a, r.b, r.width, cfg.gutterWidth, 0, {
+      dir,
+      normal: side,
+    });
+    if (strip) roadStrips.push(strip);
     for (const sign of [1, -1]) {
       fronts.push({
         a: V.addScaled(r.a, side, sign * half),
@@ -775,7 +773,7 @@ function clipToRoads(poly: Polygon, net: RoadNetwork, cfg: LotParams): Polygon |
     // the axis-aligned grid layout every lot line lay exactly on a strip edge,
     // the clipper threw, and the retry across all four quanta turned a one
     // second subdivision into thirteen.
-    const half = width / 2 + cfg.gutterWidth - 0.02;
+    const half = rightOfWayHalfWidth(width, cfg.gutterWidth) - COLLINEAR_SHRINK;
     if (
       Math.max(a.x, b.x) + half < box.minX ||
       Math.min(a.x, b.x) - half > box.maxX ||
@@ -791,21 +789,11 @@ function clipToRoads(poly: Polygon, net: RoadNetwork, cfg: LotParams): Polygon |
       poly.some((q) => V.distToSegment(q, a, b) < half) ||
       polyEdges(poly).some((e) => V.segmentDistance(e.a, e.b, a, b) < half);
     if (!near) return;
-    const d = V.sub(b, a);
-    const l = V.len(d);
-    if (l < 0.2) return;
-    const dir = V.scale(d, 1 / l);
-    const n = V.perp(dir);
-    // Cover the junction overshoot the renderer adds, so a lot cannot be left
-    // holding the corner of asphalt that spills past a node.
-    const a2 = V.addScaled(a, dir, -half);
-    const b2 = V.addScaled(b, dir, half);
-    strips.push([
-      V.addScaled(a2, n, -half),
-      V.addScaled(b2, n, -half),
-      V.addScaled(b2, n, half),
-      V.addScaled(a2, n, half),
-    ]);
+    // The strip overshoots its own ends, which covers the junction overshoot
+    // the renderer adds: a lot cannot be left holding the corner of asphalt
+    // that spills past a node.
+    const strip = rightOfWayStrip(a, b, width, cfg.gutterWidth, COLLINEAR_SHRINK);
+    if (strip) strips.push(strip);
   };
 
   for (const e of net.edges) add(net.graph.node(e.a).p, net.graph.node(e.b).p, e.width);

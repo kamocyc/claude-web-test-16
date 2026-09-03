@@ -4,8 +4,8 @@ import { generateCity } from '../src/city/City.js';
 import { planBuildings } from '../src/build/CityMesh.js';
 import { minAreaObb } from '../src/geom/obb.js';
 import { differencePoly, multiArea } from '../src/geom/boolean.js';
-import * as V from '../src/geom/vec2.js';
-import type { Polygon, Vec2 } from '../src/core/types.js';
+import type { Polygon } from '../src/core/types.js';
+import { rightOfWaySurfaces } from '../src/city/RoadSurface.js';
 
 /**
  * The proportion of a parcel, and whether the block it came out of was used up.
@@ -51,19 +51,6 @@ const median = (xs: number[]): number => {
 };
 
 const share = (xs: number[], over: number): number => xs.filter((x) => x > over).length / xs.length;
-
-/** A road's footprint, a little wider than the carriageway to cover the gutter. */
-function roadStrip(a: Vec2, b: Vec2, width: number): Polygon | null {
-  const d = V.sub(b, a);
-  const l = V.len(d);
-  if (l < 0.2) return null;
-  const dir = V.scale(d, 1 / l);
-  const n = V.perp(dir);
-  const h = width / 2;
-  const a2 = V.addScaled(a, dir, -h);
-  const b2 = V.addScaled(b, dir, h);
-  return [V.addScaled(a2, n, -h), V.addScaled(b2, n, -h), V.addScaled(b2, n, h), V.addScaled(a2, n, h)];
-}
 
 describe('parcel proportion', () => {
   for (const layout of LAYOUTS) {
@@ -116,15 +103,10 @@ describe('block efficiency', () => {
       // tell the old layout from the new one at that size.
       const { city } = town('par-2', layout, DEFAULT_PARAMS.roads.extent);
 
-      const roads: Polygon[] = [];
-      for (const e of city.roads.edges) {
-        const s = roadStrip(city.roads.graph.node(e.a).p, city.roads.graph.node(e.b).p, e.width + 1);
-        if (s) roads.push(s);
-      }
-      for (const lane of city.roads.privateLanes) {
-        const s = roadStrip(lane.a, lane.b, lane.width + 1);
-        if (s) roads.push(s);
-      }
+      // The right of way, not the bare carriageway: the land a lot is set back
+      // by is what was available to sell, and it is defined once in
+      // `city/RoadSurface.ts` rather than copied to here.
+      const roads = rightOfWaySurfaces(city.roads, DEFAULT_PARAMS.lots.gutterWidth);
 
       const lotArea = new Map<number, number>();
       for (const l of city.lots) lotArea.set(l.blockId, (lotArea.get(l.blockId) ?? 0) + l.area);

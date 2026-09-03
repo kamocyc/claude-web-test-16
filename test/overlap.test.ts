@@ -7,11 +7,11 @@ import {
 } from '../src/core/params.js';
 import { generateCity } from '../src/city/City.js';
 import { planBuildings } from '../src/build/CityMesh.js';
-import type { Polygon, Vec2 } from '../src/core/types.js';
-import * as V from '../src/geom/vec2.js';
+import type { Polygon } from '../src/core/types.js';
 import { area, maxInscribedCircle } from '../src/geom/polygon.js';
 import { differencePoly, multiArea, intersectPoly } from '../src/geom/boolean.js';
 import { UNAVOIDABLE_VACANCY } from '../src/building/types.js';
+import { drawnRoadSurfaces } from '../src/city/RoadSurface.js';
 
 /**
  * Buildings must not stand on roads, and lots must not be left empty without a
@@ -26,33 +26,6 @@ import { UNAVOIDABLE_VACANCY } from '../src/building/types.js';
 
 const LAYOUTS: RoadLayout[] = ['district', 'grid'];
 const SEEDS = ['ov-1', 'ov-2'];
-
-/**
- * The road surface as it is actually drawn.
- *
- * This has to mirror `props/Ground.ts` `addRibbon` exactly, including the
- * overshoot past a junction and the rule that a dead end and a private lane do
- * not get one. A test that used bare a-to-b rectangles would agree with the
- * generator's intent instead of with its output, and miss the two defects most
- * likely to occur.
- */
-function ribbon(a: Vec2, b: Vec2, width: number, extend: { start: boolean; end: boolean }): Polygon | null {
-  const d = V.sub(b, a);
-  const l = V.len(d);
-  if (l < 0.2) return null;
-  const dir = V.scale(d, 1 / l);
-  const n = V.perp(dir);
-  const half = width / 2;
-  const over = half * 0.9;
-  const a2 = V.addScaled(a, dir, extend.start ? -over : 0);
-  const b2 = V.addScaled(b, dir, extend.end ? over : 0);
-  return [
-    V.addScaled(a2, n, -half),
-    V.addScaled(b2, n, -half),
-    V.addScaled(b2, n, half),
-    V.addScaled(a2, n, half),
-  ];
-}
 
 interface Box {
   minX: number;
@@ -91,25 +64,16 @@ function roadAreaUnder(poly: Polygon, roads: { poly: Polygon; box: Box }[]): num
   return Math.max(0, area(poly) - multiArea(differencePoly([poly], near)));
 }
 
+/**
+ * The road surface as it is actually drawn.
+ *
+ * Taken from `city/RoadSurface.ts`, which is the same definition `props/Ground.ts`
+ * draws from. This used to be a copy carrying a comment saying it had to mirror
+ * the renderer exactly — and a copy of a rectangle is only ever as true as the
+ * last time somebody checked it.
+ */
 function roadSurfaces(city: ReturnType<typeof generateCity>): Polygon[] {
-  const degree = new Map<number, number>();
-  for (const e of city.roads.edges) {
-    degree.set(e.a, (degree.get(e.a) ?? 0) + 1);
-    degree.set(e.b, (degree.get(e.b) ?? 0) + 1);
-  }
-  const out: Polygon[] = [];
-  for (const e of city.roads.edges) {
-    const r = ribbon(city.roads.graph.node(e.a).p, city.roads.graph.node(e.b).p, e.width, {
-      start: (degree.get(e.a) ?? 0) > 1,
-      end: (degree.get(e.b) ?? 0) > 1,
-    });
-    if (r) out.push(r);
-  }
-  for (const lane of city.roads.privateLanes) {
-    const r = ribbon(lane.a, lane.b, lane.width, { start: false, end: false });
-    if (r) out.push(r);
-  }
-  return out;
+  return drawnRoadSurfaces(city.roads, city.laneHeights.profiles);
 }
 
 function meshCity(seed: string, layout: RoadLayout) {
