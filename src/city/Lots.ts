@@ -344,6 +344,10 @@ function subdivideInterior(
   const carveOuts: Polygon[] = [];
   const canRecurse = depth < cfg.maxRecursionDepth;
   let laneBuilt = false;
+  // Drawn unconditionally and before the branch, for the reason `rowDepth`
+  // gives: a draw made only on some blocks lets the shape of one block shift
+  // the random stream for every block after it.
+  const preferFlags = rng.chance(cfg.flagLotChance);
 
   if (core && canRecurse && coreArea >= cfg.minCoreArea) {
     const candidate = tryPrivateLane(core, inner, ordered, cfg, rng);
@@ -379,12 +383,38 @@ function subdivideInterior(
   // A core too small for its own lane still gets flag lots: a leftover of one or
   // two lots' worth of land behind the street row is exactly where 旗竿地 come
   // from in real Japanese blocks.
-  if (core && !laneBuilt && canRecurse && coreArea >= cfg.flagLotMinCore && rng.chance(cfg.flagLotChance)) {
-    const flags = makeFlagLots(core, inner, ordered, cfg, rng, loss);
-    parcels.push(...flags);
-    for (const f of flags) if (f.poleCorridor) carveOuts.push(f.poleCorridor);
-  } else if (core && !laneBuilt && coreArea >= cfg.minLotArea) {
-    loss.losses.add('core-abandoned', core, loss.blockId);
+  //
+  // `flagLotChance` used to decide whether the core became 旗竿地 **or vanished**,
+  // and it is 0.55, so on a middling block the land behind the houses had
+  // slightly worse than even odds of simply not existing. `canRecurse` made it
+  // worse: land behind a lane, behind a lane, was dropped every time. Neither
+  // was a decision about the town — nothing chose to leave a 300 m² hole in the
+  // middle of a block, it was the absence of a third branch.
+  //
+  // Now the chance decides 旗竿地 **or absorbed into the depth of the street
+  // row**, which is the other thing that happens to leftover land in a real
+  // block, and the depth limit goes with the lane it belongs to. That also
+  // keeps `ZONE_LOTS.industrial`, which sets the chance to zero because a
+  // 工業団地 is a grid of large parcels and not a warren: it now gets deeper
+  // parcels rather than gaps.
+  const leftovers: Polygon[] = [];
+  if (core && !laneBuilt) {
+    if (coreArea >= cfg.flagLotMinCore && preferFlags) {
+      const flags = makeFlagLots(core, inner, ordered, cfg, rng, loss);
+      parcels.push(...flags.parcels);
+      for (const f of flags.parcels) if (f.poleCorridor) carveOuts.push(f.poleCorridor);
+      leftovers.push(...flags.leftovers);
+    } else {
+      leftovers.push(core);
+    }
+  }
+
+  // The street row takes what is left. Done before slicing, so the deepened
+  // strip is cut perpendicular to its own street like any other and every lot
+  // that comes out of it still fronts one.
+  for (const piece of leftovers) {
+    if (absorbIntoRow(piece, strips)) continue;
+    if (area(piece) >= cfg.minLotArea) loss.losses.add('core-abandoned', piece, loss.blockId);
   }
 
   // --- Stage C: slice each strip perpendicular to its street ---------------
@@ -669,66 +699,120 @@ function makeFlagLots(
   cfg: LotParams,
   rng: Rng,
   loss: LossCtx = NO_LOSSES,
-): Parcel[] {
+): { parcels: Parcel[]; leftovers: Polygon[] } {
   const out: Parcel[] = [];
+  const leftovers: Polygon[] = [];
   const claimedPoles: Polygon[] = [];
 
   for (const piece of splitCoreForFlags(core, cfg, rng, loss)) {
     const c = centroid(piece);
-    // Nearest point on any street edge — that is where the pole comes out.
-    let best: { point: Vec2; d: number } | null = null;
-    for (const f of fronts) {
-      const { point } = V.closestOnSegment(c, f.a, f.b);
-      const d = V.dist(c, point);
-      if (!best || d < best.d) best = { point, d };
-    }
-    if (!best) {
-      loss.losses.add('flag-pole-failed', piece, loss.blockId);
-      continue;
-    }
+    // Every street edge in turn, nearest first, rather than the nearest only.
+    // A pole is a narrow corridor threading between two street lots, and there
+    // are several ways for one to fail — it clips to nothing, it lands on a
+    // pole already claimed, the union with its own flag comes apart. Giving up
+    // on the first of those cost the whole rear parcel, when the street round
+    // the corner would have taken it.
+    const byDistance = fronts
+      .map((f) => ({ f, ...V.closestOnSegment(c, f.a, f.b) }))
+      .map((h) => ({ point: h.point, d: V.dist(c, h.point) }))
+      .sort((x, y) => x.d - y.d);
 
-    const dir = V.normalize(V.sub(c, best.point));
-    const side = V.perp(dir);
-    const halfW = cfg.poleWidth / 2;
-    // Start just outside the frontage line, then clip back to it, so the pole
-    // reliably reaches the street and reports frontage of exactly its width.
-    const start = V.addScaled(best.point, dir, -0.5);
-    const corridorRaw: Polygon = [
-      V.addScaled(start, side, -halfW),
-      V.addScaled(c, side, -halfW),
-      V.addScaled(c, side, halfW),
-      V.addScaled(start, side, halfW),
-    ];
+    let placed = false;
+    for (const near of byDistance) {
+      // A 竿 is a driveway, not a corridor across the block. Past a row's depth
+      // the land is better off widening the row it is behind, which is where it
+      // goes when every front here is refused.
+      if (near.d > cfg.depthMax) break;
+      const dir = V.normalize(V.sub(c, near.point));
+      const side = V.perp(dir);
+      const halfW = cfg.poleWidth / 2;
+      // Start just outside the frontage line, then clip back to it, so the pole
+      // reliably reaches the street and reports frontage of exactly its width.
+      const start = V.addScaled(near.point, dir, -0.5);
+      const corridorRaw: Polygon = [
+        V.addScaled(start, side, -halfW),
+        V.addScaled(c, side, -halfW),
+        V.addScaled(c, side, halfW),
+        V.addScaled(start, side, halfW),
+      ];
 
-    let corridor = largest(intersectPoly([corridorRaw], [inner]));
-    if (!corridor) {
-      loss.losses.add('flag-pole-failed', piece, loss.blockId);
-      continue;
-    }
-    // Two poles must not overlap each other either.
-    if (claimedPoles.length > 0) {
-      corridor = largest(differencePoly([corridor], claimedPoles));
-      if (!corridor || area(corridor) < cfg.poleWidth * 2) {
-        loss.losses.add('flag-pole-failed', piece, loss.blockId);
-        continue;
+      let corridor = largest(intersectPoly([corridorRaw], [inner]));
+      if (!corridor) continue;
+      // Two poles must not overlap each other either. What is left has to still
+      // be a 竿 and not a smear of one: subtracting a claimed pole from a
+      // crossing corridor leaves a 0.4 m ribbon running the whole way alongside
+      // it, which passes an area test comfortably, cannot carry the 2 m of
+      // frontage 接道義務 asks for, and unions with its own flag into a ring
+      // that touches itself. Two of those were reported as overlapping lots.
+      if (claimedPoles.length > 0) {
+        corridor = largest(differencePoly([corridor], claimedPoles));
+        if (!corridor || area(corridor) < cfg.poleWidth * 2) continue;
+        if (maxInscribedCircle(corridor, 0.2).radius < cfg.poleWidth * 0.35) continue;
       }
-    }
 
-    const merged = largest(unionPoly([piece, corridor]));
-    if (!merged) {
-      loss.losses.add('flag-pole-failed', piece, loss.blockId);
-      continue;
-    }
-    const cleaned = cleanPolygon(merged, { tolerance: 0.05, minEdge: 0.15, minArea: cfg.minLotArea });
-    if (!cleaned) {
-      loss.losses.add('flag-pole-failed', piece, loss.blockId);
-      continue;
-    }
+      // One ring, or the pole and its flag are not joined. Subtracting a pole
+      // already claimed can cut a corridor in two and leave the half that
+      // reaches the street; `largest` then hands back that half alone, and what
+      // is registered as a 旗竿地 is a bare 31 m × 2.6 m 竿 with no land on the
+      // end of it. One of those was the whole of a finished town's unexplained
+      // vacancy — a lot no house could stand on, which is exactly what a flag
+      // lot with no flag is.
+      const merged = unionPoly([piece, corridor]);
+      if (merged.length !== 1) continue;
+      const cleaned = cleanPolygon(merged[0]!, {
+        tolerance: 0.05,
+        minEdge: 0.15,
+        minArea: cfg.minLotArea,
+      });
+      // A flag and its pole meet along one edge, so their union is one simple
+      // ring. Anything else means they met at a point, or not at all.
+      if (!cleaned || !isSimple(cleaned)) continue;
+      if (area(cleaned) < area(piece) * 0.9) continue;
 
-    claimedPoles.push(corridor);
-    out.push({ polygon: cleaned, isFlagLot: true, poleCorridor: corridor, fronts });
+      claimedPoles.push(corridor);
+      out.push({ polygon: cleaned, isFlagLot: true, poleCorridor: corridor, fronts });
+      placed = true;
+      break;
+    }
+    // No street would take a pole from this piece. It is still land, so it goes
+    // back to the caller to be absorbed rather than being written off here.
+    if (!placed) leftovers.push(piece);
   }
-  return out;
+  return { parcels: out, leftovers };
+}
+
+/**
+ * Give a piece of leftover core to the row of lots in front of it.
+ *
+ * The row is deepened and then sliced perpendicular to its own street exactly
+ * as it would have been anyway, so every lot the deepened strip produces still
+ * fronts a road — which is the whole reason this generator peels rings off a
+ * block instead of splitting it recursively.
+ *
+ * It is refused rather than forced when the union is not a single simple ring,
+ * or when its area is not the sum of its parts. Both mean the two pieces did
+ * not actually share a boundary — `largest` would then quietly hand back the
+ * strip alone and the core would be lost with the books still balancing.
+ */
+function absorbIntoRow(piece: Polygon, strips: { poly: Polygon; front: FrontRef }[]): boolean {
+  const c = centroid(piece);
+  let best: { s: { poly: Polygon; front: FrontRef }; d: number } | null = null;
+  for (const s of strips) {
+    // The row has to be in front of the piece, not across the block from it.
+    if (V.dot(V.sub(c, s.front.a), s.front.inward) <= 0) continue;
+    const d = V.dist(c, centroid(s.poly));
+    if (!best || d < best.d) best = { s, d };
+  }
+  if (!best) return false;
+
+  const want = area(best.s.poly) + area(piece);
+  const merged = largest(unionPoly([best.s.poly, piece]));
+  if (!merged) return false;
+  const cleaned = cleanPolygon(merged, { tolerance: 0.05, minEdge: 0.15, minArea: 1 });
+  if (!cleaned || !isSimple(cleaned)) return false;
+  if (Math.abs(area(cleaned) - want) > 0.5 + want * 0.002) return false;
+  best.s.poly = cleaned;
+  return true;
 }
 
 /** Recursive minimum-area split of the core into flag-lot-sized parcels. */

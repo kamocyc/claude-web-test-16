@@ -120,6 +120,24 @@ export function isConvex(poly: Polygon): boolean {
 export function isSimple(poly: Polygon): boolean {
   const n = poly.length;
   if (n < 3) return false;
+  // A spike first: a vertex where the ring turns through exactly 180° and goes
+  // back the way it came. The boundary touches itself there, so the ring is not
+  // simple — but the two segments involved are *adjacent*, which the crossing
+  // test below skips, and they are collinear, which it would not report anyway.
+  //
+  // These are not hypothetical. A flag lot unioned with a pole whose tip lands
+  // on the frontage line comes back as a body with a zero-width whisker of
+  // exactly the pole's width, and `intersectPoly` fills such a ring by its own
+  // rule rather than by the one the eye uses — two of them were reported as
+  // lots overlapping by 13 m² when neither had any land in common.
+  for (let i = 0; i < n; i++) {
+    const prev = poly[(i + n - 1) % n]!;
+    const cur = poly[i]!;
+    const next = poly[(i + 1) % n]!;
+    const a = V.normalize(V.sub(cur, prev));
+    const b = V.normalize(V.sub(next, cur));
+    if (V.dot(a, b) < -0.999999) return false;
+  }
   for (let i = 0; i < n; i++) {
     const a1 = poly[i]!;
     const a2 = poly[(i + 1) % n]!;

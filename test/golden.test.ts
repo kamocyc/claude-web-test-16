@@ -76,22 +76,22 @@ const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }
   // the test that would notice if it regressed — this one only says the town
   // stopped changing afterwards.
   'sakura-3/district': {
-    lots: 1238136529,
-    buildings: 3785270760,
+    lots: 3167323750,
+    buildings: 1634989262,
     counts:
-      '{"house":289,"apart":126,"konbini":2,"factory":1,"mansion":29,"vacant":9,"zakkyo":11,"shophouse":10}',
+      '{"house":283,"konbini":3,"apart":122,"factory":1,"mansion":27,"vacant":8,"zakkyo":10,"shophouse":12}',
   },
   'sakura-3/grid': {
-    lots: 2544414766,
-    buildings: 3030084581,
+    lots: 1634391826,
+    buildings: 2217433557,
     counts:
-      '{"warehouse":3,"factory":13,"vacant":4,"konbini":2,"apart":169,"house":154}',
+      '{"warehouse":5,"factory":9,"vacant":5,"konbini":2,"apart":166,"house":134}',
   },
   'kaede-11/district': {
-    lots: 361306851,
-    buildings: 518384031,
+    lots: 1954584437,
+    buildings: 3587424414,
     counts:
-      '{"house":239,"apart":121,"vacant":9,"mansion":33,"konbini":2,"zakkyo":18,"shophouse":2}',
+      '{"house":235,"apart":129,"mansion":31,"vacant":7,"konbini":2,"zakkyo":17,"shophouse":6}',
   },
   // And once more for every case, when the street driven through an oversized
   // block stopped having its right of way subtracted twice (`Blocks.splitOversized`).
@@ -99,6 +99,13 @@ const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }
   // lane, so no fingerprint here could have survived it. What the change is
   // worth is measured in `test/stats.test.ts`'s land ledger and in
   // `test/parcels.test.ts`; this only says the town stopped changing after it.
+  //
+  // And once when the land behind a street row stopped being thrown away on a
+  // coin flip (`Lots.subdivideInterior`). `flagLotChance` used to decide 旗竿地
+  // or *nothing*; it now decides 旗竿地 or absorbed into the depth of the row,
+  // so a core that used to vanish now belongs to somebody either way. Every
+  // block with a core moves, which is most of them. `test/stats.test.ts` is
+  // where the size of it is recorded.
   //
   // The two grown cases were re-recorded once more, when whether a plot had sold
   // stopped being read off the generation alone and started counting the steps
@@ -108,16 +115,16 @@ const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }
   // already in the same counts. No lot boundary moved, which is the claim worth
   // making about a change to a sales rule.
   'sakura-3/district/land': {
-    lots: 2584355657,
-    buildings: 3192593445,
+    lots: 1678774660,
+    buildings: 3267780716,
     counts:
-      '{"house":209,"apart":73,"vacant":28,"mansion":27,"zakkyo":7,"konbini":3,"shophouse":1,"factory":5,"warehouse":2}',
+      '{"apart":86,"house":191,"vacant":27,"mansion":22,"konbini":4,"zakkyo":7,"shophouse":3,"factory":5,"warehouse":1}',
   },
   'kaede-11/district/land': {
-    lots: 2778799719,
-    buildings: 3446376171,
+    lots: 2123027635,
+    buildings: 2233679336,
     counts:
-      '{"house":149,"apart":94,"mansion":20,"konbini":4,"vacant":8,"warehouse":6,"factory":4,"shophouse":12,"zakkyo":9}',
+      '{"house":154,"apart":90,"mansion":21,"konbini":2,"vacant":5,"warehouse":6,"factory":3,"zakkyo":13,"shophouse":4}',
   },
 };
 

@@ -407,6 +407,16 @@ export interface LotParams {
   privateLaneWidth: number;
   /** Width of a flag lot's pole (竿). */
   poleWidth: number;
+  /**
+   * How often the land behind the street row becomes 旗竿地 rather than being
+   * absorbed into the depth of the row.
+   *
+   * It used to decide 旗竿地 **or nothing**: at 0.55 the land behind the houses
+   * had slightly worse than even odds of simply not existing, and a 工業団地,
+   * which sets this to zero on purpose, lost every core it had. Which of the
+   * two ways the leftover is disposed of is a matter of taste and is what this
+   * number is for; whether it is disposed of at all never was.
+   */
   flagLotChance: number;
   /**
    * Parcels whose largest inscribed circle is smaller than this are discarded.
@@ -732,7 +742,9 @@ export const DEFAULT_PARAMS: CityParams = {
     widthMax: 22,
     cutAngleJitter: 2.5,
     minCoreArea: 520,
-    flagLotMinCore: 110,
+    // Low enough that a single small 旗竿地 — a 70 m² body plus its pole — is
+    // still worth cutting. Under it the land goes into the street row instead.
+    flagLotMinCore: 70,
     privateLaneWidth: 4,
     poleWidth: 2.6,
     flagLotChance: 0.55,
