@@ -8,9 +8,18 @@ import type { City } from '../city/City.js';
 import type { BuiltBuilding } from '../building/Builder.js';
 import { KIND_RULES } from '../building/kinds.js';
 import { buildTerrainMesh } from '../terrain/GroundMesh.js';
-import { JUNCTION_OVERSHOOT, drawnHalfWidth, nodeDegrees } from '../city/RoadSurface.js';
-import { gradeGround } from '../terrain/Graded.js';
+import {
+  drawnHalfWidth,
+  junctionPlate,
+  planJunctions,
+  plateReach,
+  type Junction,
+} from '../city/RoadSurface.js';
+import { gradeGround, type GradedGround } from '../terrain/Graded.js';
 import type { Terrain } from '../terrain/Terrain.js';
+
+/** Neither end held back: a 私道, and a road on flat ground with no junctions. */
+const ZERO_TRIM = { start: 0, end: 0 };
 
 /**
  * Ground, road surfaces, kerbs, cut-and-fill faces and the hardstanding on
@@ -31,6 +40,7 @@ export function buildGround(
   params: CityParams,
   materials: MaterialLibrary,
   buildings: BuiltBuilding[] = [],
+  graded?: GradedGround | null,
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = 'ground';
@@ -41,7 +51,7 @@ export function buildGround(
   if (terrain.field) {
     // The ground is drawn *after* the earthworks, not before them — see
     // `terrain/Graded.ts`. Without this the town is buried in its own spoil.
-    group.add(buildTerrainMesh(terrain, materials, gradeGround(city) ?? undefined));
+    group.add(buildTerrainMesh(terrain, materials, (graded ?? gradeGround(city)) ?? undefined));
   } else {
     // Flat world: the original single plane, kept because turning terrain off
     // has to give back exactly the town this generator used to make.
@@ -76,16 +86,16 @@ export function buildGround(
   const earthworks = new GeometryBuffer();
 
   /**
-   * `extend` closes the gap at a junction by running the ribbon a little past
-   * its node — but only where there is a second ribbon to close against. At a
-   * dead end, and at both ends of a private lane, the node *is* the extent of
-   * the land taken from the lots, and running past it puts asphalt over ground
-   * a house is standing on.
+   * One straight run of carriageway, between the junctions at its ends.
    *
-   * `ya`/`yb` are the design heights at the two nodes. Because every road
-   * meeting at a junction was given the *same* height for that node, the
-   * overshoots from all the arms land on one plane and the corner closes
-   * exactly — which is the whole reason the profile is solved per node.
+   * `trim` is how much of each end belongs to a junction plate rather than to
+   * this ribbon — see `city/RoadSurface.ts`. Everything a ribbon carries stops
+   * with it: the 側溝 no longer runs across the mouth of the side street, and
+   * neither does the cut face behind it.
+   *
+   * `ya`/`yb` are the design heights at the two *nodes*, so the surface is the
+   * same plane whether or not the ends were trimmed — the plate is fanned from
+   * the same heights and the two meet exactly along the trim line.
    */
   const addRibbon = (
     a: Vec2,
@@ -93,20 +103,20 @@ export function buildGround(
     width: number,
     ya: number,
     yb: number,
-    extend: { start: boolean; end: boolean },
+    trim: { start: number; end: number },
   ) => {
     const d = V.sub(b, a);
     const l = V.len(d);
     if (l < 0.2) return;
     const dir = V.scale(d, 1 / l);
     const n = V.perp(dir);
-    // Both numbers come from `city/RoadSurface.ts`, which is what the lot
-    // subdivider, the debug overlay and the tests measure against. They used to
-    // be written out here and copied into four other files.
+    // From `city/RoadSurface.ts`, which is what the lot subdivider, the debug
+    // overlay and the tests measure against. It used to be written out here and
+    // copied into four other files.
     const half = drawnHalfWidth(width);
-    const over = half * JUNCTION_OVERSHOOT;
-    const a2 = V.addScaled(a, dir, extend.start ? -over : 0);
-    const b2 = V.addScaled(b, dir, extend.end ? over : 0);
+    const a2 = V.addScaled(a, dir, trim.start);
+    const b2 = V.addScaled(b, dir, -trim.end);
+    if (V.dot(V.sub(b2, a2), dir) < 0.2) return;
 
     // The carriageway is level across and linear along, so its surface is a
     // plane: `pushLiftedCap` is documented as exact for exactly this case.
@@ -146,34 +156,114 @@ export function buildGround(
     // river instead.
     const crossing = city.obstacles.waterCrossing(a2, b2);
     if (crossing) {
-      addBridge(earthworks, a2, b2, dir, n, half, surfaceY, crossing);
+      addBridge(earthworks, a2, b2, n, half, surfaceY, crossing);
       return;
     }
-    addEarthworks(earthworks, terrain, a2, b2, dir, n, half, surfaceY, params.platform.roadWallMin);
+    for (const side of [1, -1] as const) {
+      const p0 = V.addScaled(a2, n, half * side);
+      const p1 = V.addScaled(b2, n, half * side);
+      addFaceRun(
+        earthworks,
+        terrain,
+        p0,
+        p1,
+        surfaceY(p0, 0.035),
+        surfaceY(p1, 0.035),
+        V.scale(n, side),
+        params.platform.roadWallMin,
+      );
+    }
   };
 
-  // How many roads meet at each node, so a ribbon knows whether there is
-  // anything at its end to close the gap against.
-  const degree = nodeDegrees(city.roads);
+  /**
+   * The asphalt of one junction: a fan from the node out to every arm's end.
+   *
+   * Flat across each triangle and pinned at the arms' own end heights, so an
+   * intersection between roads of different gradient is one continuous surface
+   * rather than two planes crossing each other. Deliberately no 側溝 — a real
+   * intersection has none, and the kerb is exactly what used to be drawn across
+   * it.
+   */
+  const addJunction = (j: Junction) => {
+    const plate = junctionPlate(j);
+    if (!plate) return;
+    const { ring, from } = plate;
+    const yNode = heights.at(j.node);
+    // Each arm's end edge is level across, at that arm's own design height where
+    // it was cut — which is what makes the seam between the plate and the ribbon
+    // exact rather than nearly exact.
+    const armY = j.arms.map(
+      (arm) => yNode + (heights.at(arm.far) - yNode) * (plateReach(arm) / arm.len),
+    );
+    // A mitre lies between two arms, so it takes the mean of what they are
+    // doing; an arm's own corner names that arm twice. `f` is how far out along
+    // them the vertex is, so a kerb point beside the node comes back to the
+    // node's own height rather than to the arm's end.
+    const ys = from.map(
+      (v) => yNode + (v.f * (armY[v.a]! - yNode + (armY[v.b]! - yNode))) / 2,
+    );
+
+    asphalt.setColor({ r: 0.155, g: 0.157, b: 0.168 });
+    const centre = { x: j.p.x, y: yNode + 0.02, z: j.p.y };
+    for (let i = 0; i < ring.length; i++) {
+      const k = (i + 1) % ring.length;
+      const q0 = ring[i]!;
+      const q1 = ring[k]!;
+      asphalt.pushTriangle(
+        centre,
+        { x: q1.x, y: ys[k]! + 0.02, z: q1.y },
+        { x: q0.x, y: ys[i]! + 0.02, z: q0.y },
+      );
+    }
+
+    if (!terrain.field) return;
+    // The run between one arm's end edge and the next's is an open edge of the
+    // town's asphalt: the arms' own cut faces stop at their trim lines, so
+    // without this the corner of every junction on a slope is a hole.
+    for (let i = 0; i < ring.length; i++) {
+      const k = (i + 1) % ring.length;
+      // Not across an arm's own end edge — the ribbon is on the other side of
+      // it, not the hillside.
+      const fi = from[i]!;
+      const fk = from[k]!;
+      if (fi.a === fi.b && fk.a === fk.b && fi.a === fk.a && fi.f === 1 && fk.f === 1) continue;
+      const q0 = ring[i]!;
+      const q1 = ring[k]!;
+      const d = V.sub(q1, q0);
+      const len = V.len(d);
+      if (len < 0.2) continue;
+      addFaceRun(
+        earthworks,
+        terrain,
+        q0,
+        q1,
+        ys[i]! + 0.035,
+        ys[k]! + 0.035,
+        // The ring is anticlockwise, so the outward side of an edge is to its
+        // right.
+        V.neg(V.perp(V.scale(d, 1 / len))),
+        params.platform.roadWallMin,
+      );
+    }
+  };
+
+  // Which roads meet where, and how far short of each junction the asphalt
+  // stops so the plate can fill it.
+  const { junctions, trims } = planJunctions(city.roads);
 
   for (const e of city.roads.edges) {
     const a = city.roads.graph.node(e.a).p;
     const b = city.roads.graph.node(e.b).p;
-    // The overshoot fills the corner where two ribbons meet. At a dead end
-    // there is no second ribbon and nothing to fill — the asphalt simply ran
-    // 0.45 of a carriageway past the last node, onto the lot behind it. The
-    // land there belongs to a house.
-    addRibbon(a, b, e.width, heights.at(e.a), heights.at(e.b), {
-      start: (degree.get(e.a) ?? 0) > 1,
-      end: (degree.get(e.b) ?? 0) > 1,
-    });
+    addRibbon(a, b, e.width, heights.at(e.a), heights.at(e.b), trims.get(e.id) ?? ZERO_TRIM);
   }
+  for (const j of junctions) addJunction(j);
+
   // A 私道 is drawn station by station rather than as one plane between its ends.
   // It has no node in the road graph, so it is not in the profile solve with the
   // streets; `solveLaneProfiles` gives it one of its own, and the whole point of
   // that profile is that it follows the land — which one flat quad cannot do.
   // Consecutive stations are collinear and share their end heights exactly, so
-  // the pieces meet without the junction overshoot a corner needs.
+  // the pieces meet without a plate between them.
   for (const prof of city.laneHeights.profiles) {
     for (let i = 0; i + 1 < prof.points.length; i++) {
       addRibbon(
@@ -182,7 +272,7 @@ export function buildGround(
         prof.width,
         prof.heights[i]!,
         prof.heights[i + 1]!,
-        { start: false, end: false },
+        ZERO_TRIM,
       );
     }
   }
@@ -218,7 +308,6 @@ function addBridge(
   buf: GeometryBuffer,
   a: Vec2,
   b: Vec2,
-  dir: Vec2,
   n: Vec2,
   half: number,
   surfaceY: (p: Vec2, lift: number) => number,
@@ -260,69 +349,72 @@ function addBridge(
       (p) => surfaceY(p, 0.95),
     );
   }
-  void dir;
 }
 
 /**
- * The cut and the fill along one carriageway edge.
+ * The cut and the fill along one open edge of the town's asphalt.
  *
- * Where the road's design height and the ground disagree, something has to make
- * up the difference or there is a slot of daylight between the asphalt and the
+ * Where the design height and the ground disagree, something has to make up the
+ * difference or there is a slot of daylight between the asphalt and the
  * hillside. Below `wallMin` it is an earth batter in the ground colour; above,
  * a concrete face. The threshold is not cosmetic — a 3 m batter at 1:1.5 would
  * be 4.5 m of ground, which is a whole lot's worth, and the reason real hillside
  * streets are walled rather than sloped.
+ *
+ * Written against a single segment with an explicit outward direction rather
+ * than against a whole carriageway, because a junction has open edges too: the
+ * chamfer between two arms of an intersection is asphalt with nothing under it
+ * in exactly the same way a kerb line is.
  */
-function addEarthworks(
+function addFaceRun(
   buf: GeometryBuffer,
   terrain: Terrain,
-  a: Vec2,
-  b: Vec2,
-  dir: Vec2,
-  n: Vec2,
-  half: number,
-  surfaceY: (p: Vec2, lift: number) => number,
+  p0: Vec2,
+  p1: Vec2,
+  y0: number,
+  y1: number,
+  outward: Vec2,
   wallMin: number,
 ): void {
-  void dir;
-  const len = V.dist(a, b);
+  const len = V.dist(p0, p1);
+  if (len < 1e-6) return;
   const steps = Math.max(1, Math.round(len / 4));
 
-  for (const side of [1, -1] as const) {
-    for (let i = 0; i < steps; i++) {
-      const p0 = V.addScaled(V.lerp(a, b, i / steps), n, half * side);
-      const p1 = V.addScaled(V.lerp(a, b, (i + 1) / steps), n, half * side);
-      const y0 = surfaceY(p0, 0.035);
-      const y1 = surfaceY(p1, 0.035);
-      const g0 = terrain.heightAt(p0);
-      const g1 = terrain.heightAt(p1);
-      const d0 = y0 - g0;
-      const d1 = y1 - g1;
-      if (Math.abs(d0) < 0.08 && Math.abs(d1) < 0.08) continue;
+  for (let i = 0; i < steps; i++) {
+    const t0 = i / steps;
+    const t1 = (i + 1) / steps;
+    const s0 = V.lerp(p0, p1, t0);
+    const s1 = V.lerp(p0, p1, t1);
+    const ya = y0 + (y1 - y0) * t0;
+    const yb = y0 + (y1 - y0) * t1;
+    const g0 = terrain.heightAt(s0);
+    const g1 = terrain.heightAt(s1);
+    const d0 = ya - g0;
+    const d1 = yb - g1;
+    if (Math.abs(d0) < 0.08 && Math.abs(d1) < 0.08) continue;
 
-      const wall = Math.max(Math.abs(d0), Math.abs(d1)) >= wallMin;
-      buf.setColor(wall ? { r: 0.66, g: 0.65, b: 0.62 } : { r: 0.44, g: 0.43, b: 0.36 });
+    const wall = Math.max(Math.abs(d0), Math.abs(d1)) >= wallMin;
+    buf.setColor(wall ? { r: 0.66, g: 0.65, b: 0.62 } : { r: 0.44, g: 0.43, b: 0.36 });
 
-      // A batter leans away from the road; a wall drops straight down. Either
-      // way the quad runs from the kerb line to where it meets the ground.
-      const lean = wall ? 0.04 : Math.min(2.5, Math.abs(d0) * 1.5);
-      const q0 = V.addScaled(p0, n, lean * side);
-      const q1 = V.addScaled(p1, n, lean * side);
+    // A batter leans away from the road; a wall drops straight down. Either
+    // way the quad runs from the kerb line to where it meets the ground.
+    const lean = wall ? 0.04 : Math.min(2.5, Math.abs(d0) * 1.5);
+    const q0 = V.addScaled(s0, outward, lean);
+    const q1 = V.addScaled(s1, outward, lean);
 
-      // Winding depends on which side and whether we are above or below the
-      // ground, so the face is emitted both ways — this is a thin sliver seen
-      // from one side in practice, and a wrongly-wound one is invisible.
-      buf.pushWorldTriangle(
-        { x: p0.x, y: y0, z: p0.y },
-        { x: p1.x, y: y1, z: p1.y },
-        { x: q1.x, y: g1, z: q1.y },
-      );
-      buf.pushWorldTriangle(
-        { x: p0.x, y: y0, z: p0.y },
-        { x: q1.x, y: g1, z: q1.y },
-        { x: q0.x, y: g0, z: q0.y },
-      );
-    }
+    // Winding depends on which side and whether we are above or below the
+    // ground, so the face is emitted both ways — this is a thin sliver seen
+    // from one side in practice, and a wrongly-wound one is invisible.
+    buf.pushWorldTriangle(
+      { x: s0.x, y: ya, z: s0.y },
+      { x: s1.x, y: yb, z: s1.y },
+      { x: q1.x, y: g1, z: q1.y },
+    );
+    buf.pushWorldTriangle(
+      { x: s0.x, y: ya, z: s0.y },
+      { x: q1.x, y: g1, z: q1.y },
+      { x: q0.x, y: g0, z: q0.y },
+    );
   }
 }
 

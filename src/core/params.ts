@@ -272,7 +272,16 @@ export interface PlatformParams {
   /** Height difference above which a boundary gets a wall rather than a batter. */
   wallMin: number;
   wallThickness: number;
-  /** How far inside the boundary the wall stands. */
+  /**
+   * How far inside the boundary the wall stands.
+   *
+   * A hair, and no more. It used to be 0.3 m, which put the 擁壁 a third of a
+   * metre *behind* the ブロック塀 that is supposed to stand on top of it — the
+   * fence went in at 0.06 with a 0.14 m block, so it hung over the front of the
+   * wall with nothing under it, and the pad cap ran out past both of them. The
+   * only thing the inset is for is keeping two neighbours' walls from z-fighting
+   * along a shared boundary, and 5 cm each does that.
+   */
   wallInset: number;
   /** Run over rise of an earth batter. */
   batterSlope: number;
@@ -799,7 +808,7 @@ export const DEFAULT_PARAMS: CityParams = {
     maxCutBelowStreet: 1.5,
     wallMin: 0.5,
     wallThickness: 0.25,
-    wallInset: 0.3,
+    wallInset: 0.05,
     batterSlope: 1.5,
     stepRiser: 0.16,
     roadWallMin: 0.6,

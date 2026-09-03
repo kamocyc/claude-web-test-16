@@ -17,6 +17,7 @@ import { KIND_RULES } from '../building/kinds.js';
 import { PropRegistry } from '../props/PropRegistry.js';
 import type { MaterialLibrary } from '../material/materials.js';
 import { ChunkedMeshBuilder } from './MeshMerger.js';
+import { gradeGround } from '../terrain/Graded.js';
 import { unsoldChance } from '../city/RoadGrowth.js';
 
 export interface CityMeshResult {
@@ -155,13 +156,21 @@ export function buildCityMesh(
     });
   }
 
+  // The ground as it is *drawn*, cut where the town dug. Solved once here and
+  // handed to both of its users, rather than by whoever happens to want it: the
+  // terrain mesh is built from this surface and every wall and batter has to
+  // meet it, and while only the mesh builder read it, the walls were measured
+  // against the natural land instead — which is how two fifths of the 擁壁 in
+  // the town came to be standing on air.
+  const graded = gradeGround(city);
+
   // 擁壁, batters and the steps up from the street. Emitted for every lot, not
   // just the built ones: an empty parcel on a slope was still cut and still
   // needs holding up, and leaving those out puts a notch in every terrace.
-  buildRetaining(chunks, city, params.platform);
+  buildRetaining(chunks, city, params.platform, graded);
 
   group.add(chunks.build(materials));
-  group.add(buildGround(city, params, materials, buildings));
+  group.add(buildGround(city, params, materials, buildings, graded));
   group.add(props.build(materials));
 
   return {
