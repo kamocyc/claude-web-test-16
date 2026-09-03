@@ -5,6 +5,7 @@ import { clearanceViolations } from '../src/city/RoadClearance.js';
 import { districtAdjacency } from '../src/city/LandUse.js';
 import { planBuildings } from '../src/build/CityMesh.js';
 import { UNBUILDABLE_VACANCY, UNSOLD_VACANCY } from '../src/building/types.js';
+import { LAND_LOSS_REASONS, auditLand } from '../src/city/LandLoss.js';
 
 /**
  * Not an assertion suite — a printout of what the generator actually produces,
@@ -92,6 +93,15 @@ describe('city statistics', () => {
     );
 
     const tier1 = city.roads.edges.filter((e) => e.cls !== 'local').length;
+    // What happened to every square metre of every block. The three columns
+    // must add up to the block area by construction, so the interesting number
+    // is `???` — land nobody recorded a decision about.
+    const land = auditLand(city);
+    const lostBy = LAND_LOSS_REASONS.filter((r) => land.byReason[r] >= 1)
+      .sort((a, b) => land.byReason[b] - land.byReason[a])
+      .map((r) => `${r}=${land.byReason[r].toFixed(0)}`)
+      .join(' ');
+
     const violations = clearanceViolations(city.roads, {
       clearance: params.roads.roadClearance,
       includeLanes: true,
@@ -123,6 +133,14 @@ describe('city statistics', () => {
           ` (largest ${Math.max(0, ...empty.map((b) => b.area)).toFixed(0)} m²)`,
         `no frontage:${noFrontage} blocks`,
         `blk area:   max ${Math.max(...city.blocks.map((b) => b.area)).toFixed(0)} m²`,
+        `land:       ${land.blockArea.toFixed(0)} m² of blocks =` +
+          ` ${land.lotArea.toFixed(0)} lots +` +
+          ` ${land.rowArea.toFixed(0)} road +` +
+          ` ${(land.blockArea - land.lotArea - land.rowArea).toFixed(0)} unused` +
+          ` — waste ${(land.wasteShare * 100).toFixed(1)}%,` +
+          ` ??? ${land.byReason.unaccounted.toFixed(0)} m² in ${land.unaccounted.length} pieces`,
+        `land lost:  ${lostBy}`,
+        `outside:    ${land.preBlockArea.toFixed(0)} m² discarded before any block`,
         `timings:    ${Object.entries(city.timings).map(([k, v]) => `${k}=${v.toFixed(0)}ms`).join(' ')}`,
         `total:      ${total.toFixed(0)}ms`,
         '',

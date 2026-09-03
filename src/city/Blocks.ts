@@ -18,6 +18,7 @@ import type { ObstacleField } from '../terrain/Obstacles.js';
 import type { RoadClass, RoadNetwork } from './Roads.js';
 import { districtContaining } from './RoadDistricts.js';
 import { trimLaneEnds } from './RoadClearance.js';
+import { NO_LAND_LOSSES, type LandLossSink } from './LandLoss.js';
 
 /**
  * Block extraction: bounded faces of the road graph become city blocks, and each
@@ -103,6 +104,8 @@ export interface BlockOptions {
   laneClearance: number;
   /** Water and scarps to carve out of the blocks. Absent on flat ground. */
   obstacles?: ObstacleField;
+  /** Where faces that never become blocks are recorded. Optional; see `LandLoss`. */
+  losses?: LandLossSink;
 }
 
 export const DEFAULT_BLOCK_OPTIONS: BlockOptions = {
@@ -118,6 +121,7 @@ export function extractBlocks(
   seed: string,
   opts: BlockOptions = DEFAULT_BLOCK_OPTIONS,
 ): BlockExtraction {
+  const losses = opts.losses ?? NO_LAND_LOSSES;
   // Dead-end chains would be walked out and back, injecting zero-area spikes
   // into the face polygons which then wreck the offsetter downstream.
   const spurs = findSpurs(net.graph);
@@ -179,9 +183,13 @@ export function extractBlocks(
       opts.obstacles,
     )) {
       const cleaned = cleanPolygon(part, { tolerance: 0.05, minEdge: 0.3, minArea: 1 });
-      if (!cleaned || !isSimple(cleaned)) continue;
+      if (!cleaned || !isSimple(cleaned)) {
+        losses.add('block-degenerate', part, -1);
+        continue;
+      }
       if (area(cleaned) < opts.minArea) {
         rejected.push(cleaned);
+        losses.add('block-too-small', cleaned, -1);
         continue;
       }
 
@@ -195,7 +203,10 @@ export function extractBlocks(
       // one on the road network, so a town stopped at step 8 came out with its
       // fields neatly gridded in 私道.
       const faceDistrict = districtContaining(net.districts, centroid(cleaned));
-      if (faceDistrict && !faceDistrict.developed) continue;
+      if (faceDistrict && !faceDistrict.developed) {
+        losses.add('block-undeveloped', cleaned, -1);
+        continue;
+      }
 
       // And the size limit: an oversized block would otherwise be dropped,
       // leaving a conspicuous hole in the town, so a street is run through it
@@ -212,6 +223,7 @@ export function extractBlocks(
         const a = area(piece);
         if (a < opts.minArea) {
           rejected.push(piece);
+          losses.add('block-too-small', piece, -1);
           continue;
         }
         const id = blocks.length;

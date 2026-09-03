@@ -23,6 +23,7 @@ import type { RoadClass, RoadNetwork } from './Roads.js';
 import type { BuildingKind, VacancyReason } from '../building/types.js';
 import { laneClears } from './RoadClearance.js';
 import { rightOfWayHalfWidth, rightOfWayStrip } from './RoadSurface.js';
+import { NO_LAND_LOSSES, type LandLossSink } from './LandLoss.js';
 
 /**
  * Lot subdivision — the crux of the whole generator. Everything downstream
@@ -135,13 +136,28 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
 /** See `clipToRoads`: how far the safety-net strip is pulled in off a lot line. */
 const COLLINEAR_SHRINK = 0.02;
 
+/**
+ * Where land this block discards is recorded, and which block to charge it to.
+ *
+ * Carried as one object rather than two arguments because it is threaded
+ * through six functions that otherwise have nothing to say about it.
+ */
+interface LossCtx {
+  losses: LandLossSink;
+  blockId: number;
+}
+
+const NO_LOSSES: LossCtx = { losses: NO_LAND_LOSSES, blockId: -1 };
+
 export function subdivideBlock(
   block: Block,
   net: RoadNetwork,
   params: CityParams,
   idOffset: number,
   obstacles?: ObstacleField,
+  losses: LandLossSink = NO_LAND_LOSSES,
 ): Lot[] {
+  const loss: LossCtx = { losses, blockId: block.id };
   // The block's 用途地域 reaches subdivision here and nowhere else. A factory
   // parcel and a shophouse frontage are not reachable from one set of numbers
   // tuned for detached houses, and this single read is the whole seam.
@@ -211,7 +227,12 @@ export function subdivideBlock(
     }
   }
 
-  if (fronts.length === 0) return [];
+  // No street was attributed to any edge of this block, so nothing on it could
+  // ever meet 接道義務. The whole face goes back on the books as lost.
+  if (fronts.length === 0) {
+    loss.losses.add('block-no-frontage', block.polygon, block.id);
+    return [];
+  }
 
   // Every part, not just the largest. Taking a street's right of way out of a
   // block can leave two pieces — an interior dead end makes a C, and a lane cut
@@ -219,15 +240,21 @@ export function subdivideBlock(
   // other away as bare ground.
   const parcels: Parcel[] = [];
   for (const inner of differencePoly([block.polygon], roadStrips)) {
-    if (area(inner) < cfg.minLotArea) continue;
+    if (area(inner) < cfg.minLotArea) {
+      loss.losses.add('offcut-too-small', inner, block.id);
+      continue;
+    }
     // Only the frontages this piece actually touches; a reference on the far
     // side of the street would have the piece set back for a road it does not
     // reach, and then sliced perpendicular to a street it cannot see.
     const own = fronts.filter((f) => touchesFront(inner, f));
-    if (own.length === 0) continue;
-    parcels.push(...subdivideInterior(inner, own, cfg, rng, net, 0));
+    if (own.length === 0) {
+      loss.losses.add('offcut-no-frontage', inner, block.id);
+      continue;
+    }
+    parcels.push(...subdivideInterior(inner, own, cfg, rng, net, 0, loss));
   }
-  return finaliseLots(parcels, block, fronts, cfg, idOffset, net, obstacles);
+  return finaliseLots(parcels, block, fronts, cfg, idOffset, net, obstacles, loss);
 }
 
 /**
@@ -241,6 +268,7 @@ function subdivideInterior(
   rng: Rng,
   net: RoadNetwork,
   depth: number,
+  loss: LossCtx = NO_LOSSES,
 ): Parcel[] {
   const parcels: Parcel[] = [];
 
@@ -303,6 +331,7 @@ function subdivideInterior(
     if (consumed.length > 0) band = differencePoly(band, consumed);
     for (const p of band) {
       if (area(p) >= cfg.minLotArea * 0.6) strips.push({ poly: p, front: f });
+      else loss.losses.add('offcut-too-small', p, loss.blockId);
       consumed.push(p);
     }
   }
@@ -333,10 +362,16 @@ function subdivideInterior(
       carveOuts.push(lane.corridor);
       const laneFronts = laneFrontRefs(lane, cfg);
       for (const piece of differencePoly([core], [lane.corridor])) {
-        if (area(piece) < cfg.minLotArea) continue;
+        if (area(piece) < cfg.minLotArea) {
+          loss.losses.add('offcut-too-small', piece, loss.blockId);
+          continue;
+        }
         const usable = laneFronts.filter((lf) => touchesFront(piece, lf));
-        if (usable.length === 0) continue;
-        parcels.push(...subdivideInterior(piece, usable, cfg, rng, net, depth + 1));
+        if (usable.length === 0) {
+          loss.losses.add('offcut-no-frontage', piece, loss.blockId);
+          continue;
+        }
+        parcels.push(...subdivideInterior(piece, usable, cfg, rng, net, depth + 1, loss));
       }
     }
   }
@@ -345,9 +380,11 @@ function subdivideInterior(
   // two lots' worth of land behind the street row is exactly where 旗竿地 come
   // from in real Japanese blocks.
   if (core && !laneBuilt && canRecurse && coreArea >= cfg.flagLotMinCore && rng.chance(cfg.flagLotChance)) {
-    const flags = makeFlagLots(core, inner, ordered, cfg, rng);
+    const flags = makeFlagLots(core, inner, ordered, cfg, rng, loss);
     parcels.push(...flags);
     for (const f of flags) if (f.poleCorridor) carveOuts.push(f.poleCorridor);
+  } else if (core && !laneBuilt && coreArea >= cfg.minLotArea) {
+    loss.losses.add('core-abandoned', core, loss.blockId);
   }
 
   // --- Stage C: slice each strip perpendicular to its street ---------------
@@ -363,6 +400,8 @@ function subdivideInterior(
       for (const piece of differencePoly([sp.polygon], carveOuts)) {
         if (area(piece) >= cfg.minLotArea * 0.5) {
           parcels.push({ ...sp, polygon: piece });
+        } else {
+          loss.losses.add('offcut-too-small', piece, loss.blockId);
         }
       }
     }
@@ -629,11 +668,12 @@ function makeFlagLots(
   fronts: FrontRef[],
   cfg: LotParams,
   rng: Rng,
+  loss: LossCtx = NO_LOSSES,
 ): Parcel[] {
   const out: Parcel[] = [];
   const claimedPoles: Polygon[] = [];
 
-  for (const piece of splitCoreForFlags(core, cfg, rng)) {
+  for (const piece of splitCoreForFlags(core, cfg, rng, loss)) {
     const c = centroid(piece);
     // Nearest point on any street edge — that is where the pole comes out.
     let best: { point: Vec2; d: number } | null = null;
@@ -642,7 +682,10 @@ function makeFlagLots(
       const d = V.dist(c, point);
       if (!best || d < best.d) best = { point, d };
     }
-    if (!best) continue;
+    if (!best) {
+      loss.losses.add('flag-pole-failed', piece, loss.blockId);
+      continue;
+    }
 
     const dir = V.normalize(V.sub(c, best.point));
     const side = V.perp(dir);
@@ -658,17 +701,29 @@ function makeFlagLots(
     ];
 
     let corridor = largest(intersectPoly([corridorRaw], [inner]));
-    if (!corridor) continue;
+    if (!corridor) {
+      loss.losses.add('flag-pole-failed', piece, loss.blockId);
+      continue;
+    }
     // Two poles must not overlap each other either.
     if (claimedPoles.length > 0) {
       corridor = largest(differencePoly([corridor], claimedPoles));
-      if (!corridor || area(corridor) < cfg.poleWidth * 2) continue;
+      if (!corridor || area(corridor) < cfg.poleWidth * 2) {
+        loss.losses.add('flag-pole-failed', piece, loss.blockId);
+        continue;
+      }
     }
 
     const merged = largest(unionPoly([piece, corridor]));
-    if (!merged) continue;
+    if (!merged) {
+      loss.losses.add('flag-pole-failed', piece, loss.blockId);
+      continue;
+    }
     const cleaned = cleanPolygon(merged, { tolerance: 0.05, minEdge: 0.15, minArea: cfg.minLotArea });
-    if (!cleaned) continue;
+    if (!cleaned) {
+      loss.losses.add('flag-pole-failed', piece, loss.blockId);
+      continue;
+    }
 
     claimedPoles.push(corridor);
     out.push({ polygon: cleaned, isFlagLot: true, poleCorridor: corridor, fronts });
@@ -677,7 +732,12 @@ function makeFlagLots(
 }
 
 /** Recursive minimum-area split of the core into flag-lot-sized parcels. */
-function splitCoreForFlags(core: Polygon, cfg: LotParams, rng: Rng): Polygon[] {
+function splitCoreForFlags(
+  core: Polygon,
+  cfg: LotParams,
+  rng: Rng,
+  loss: LossCtx = NO_LOSSES,
+): Polygon[] {
   const target = rng.gaussClamped(cfg.depthMean * cfg.widthMean, 40, cfg.minLotArea * 1.4, cfg.maxLotArea);
   const out: Polygon[] = [];
   const stack: Polygon[] = [core];
@@ -688,6 +748,7 @@ function splitCoreForFlags(core: Polygon, cfg: LotParams, rng: Rng): Polygon[] {
     const a = area(p);
     if (a <= target * 1.5 || a < cfg.minLotArea * 2) {
       if (a >= cfg.minLotArea) out.push(p);
+      else loss.losses.add('offcut-too-small', p, loss.blockId);
       continue;
     }
     // Split across the longest extent so parcels stay compact.
@@ -695,6 +756,7 @@ function splitCoreForFlags(core: Polygon, cfg: LotParams, rng: Rng): Polygon[] {
     const [left, right] = splitPolygonByLine(p, centroid(p), V.perp(e));
     if (left.length === 0 || right.length === 0) {
       if (a >= cfg.minLotArea) out.push(p);
+      else loss.losses.add('offcut-too-small', p, loss.blockId);
       continue;
     }
     stack.push(...left, ...right);
@@ -703,7 +765,12 @@ function splitCoreForFlags(core: Polygon, cfg: LotParams, rng: Rng): Polygon[] {
 }
 
 /** Repeatedly halve an oversized parcel across its longest extent. */
-function resliceOversized(poly: Polygon, cap: number, cfg: LotParams): Polygon[] {
+function resliceOversized(
+  poly: Polygon,
+  cap: number,
+  cfg: LotParams,
+  loss: LossCtx = NO_LOSSES,
+): Polygon[] {
   const out: Polygon[] = [];
   const stack: Polygon[] = [poly];
   let guard = 0;
@@ -713,6 +780,7 @@ function resliceOversized(poly: Polygon, cap: number, cfg: LotParams): Polygon[]
     const a = area(p);
     if (a <= cap || a < cfg.minLotArea * 2) {
       if (a >= cfg.minLotArea) out.push(p);
+      else loss.losses.add('offcut-too-small', p, loss.blockId);
       continue;
     }
     // Split perpendicular to the widest direction of the oriented bounding box.
@@ -721,6 +789,7 @@ function resliceOversized(poly: Polygon, cap: number, cfg: LotParams): Polygon[]
     const [left, right] = splitPolygonByLine(p, centroid(p), acrossLong);
     if (left.length === 0 || right.length === 0) {
       if (a >= cfg.minLotArea) out.push(p);
+      else loss.losses.add('offcut-too-small', p, loss.blockId);
       continue;
     }
     stack.push(...left, ...right);
@@ -819,44 +888,70 @@ function finaliseLots(
   idOffset: number,
   net: RoadNetwork,
   obstacles: ObstacleField | undefined,
+  loss: LossCtx = NO_LOSSES,
 ): Lot[] {
   const kept: { parcel: Parcel; frontages: LotFrontage[] }[] = [];
+  const lost = (reason: Parameters<LandLossSink['add']>[0], poly: Polygon): void => {
+    loss.losses.add(reason, poly, loss.blockId);
+  };
 
   const accept = (p: Parcel, depth = 0): void => {
     const onLand = clipToRoads(p.polygon, net, cfg);
-    if (!onLand) return;
+    if (!onLand) {
+      lost('lot-on-road', p.polygon);
+      return;
+    }
     const cleaned = cleanPolygon(onLand, { tolerance: 0.04, minEdge: 0.2, minArea: 1 });
-    if (!cleaned) return;
+    if (!cleaned) {
+      lost('lot-degenerate', onLand);
+      return;
+    }
 
     // Subtracting two road strips that meet at a block corner can pinch the
     // remainder into a ring that touches itself. A union decomposes it into
     // separate simple components; handing a figure-eight downstream produces a
     // building with self-crossing walls.
     if (!isSimple(cleaned)) {
-      if (depth >= 3) return;
+      if (depth >= 3) {
+        lost('lot-degenerate', cleaned);
+        return;
+      }
       for (const piece of unionPoly([cleaned])) {
         if (isSimple(piece)) accept({ ...p, polygon: piece }, depth + 1);
+        else lost('lot-degenerate', piece);
       }
       return;
     }
 
     const a = area(cleaned);
-    if (a < cfg.minLotArea) return;
+    if (a < cfg.minLotArea) {
+      lost('lot-too-small', cleaned);
+      return;
+    }
     // Unbuildable slivers: long and thin, nothing fits.
-    if (maxInscribedCircle(cleaned, 0.4).radius < cfg.minInscribedRadius) return;
+    if (maxInscribedCircle(cleaned, 0.4).radius < cfg.minInscribedRadius) {
+      lost('lot-too-narrow', cleaned);
+      return;
+    }
 
     // Land the river or a scarp has already claimed. The blocks were carved
     // around the water upstream of here, but `geom/boolean.ts` drops holes, so a
     // bend of the river that closes inside a single block survives the carve
     // untouched. Without this gate that bend gets a row of houses in it, and the
     // failure is spectacular rather than subtle.
-    if (obstacles && !obstacles.buildable(centroid(cleaned))) return;
+    if (obstacles && !obstacles.buildable(centroid(cleaned))) {
+      lost('lot-unbuildable-ground', cleaned);
+      return;
+    }
 
     // The block's street refs plus whatever the parcel itself fronts (a private
     // lane, typically) — see the note on `Parcel.fronts`.
     const frontages = computeFrontages(cleaned, [...blockFronts, ...p.fronts], cfg);
     // 接道義務: without frontage the parcel cannot exist as a lot.
-    if (frontages.length === 0) return;
+    if (frontages.length === 0) {
+      lost('lot-no-frontage', cleaned);
+      return;
+    }
     frontages.sort((x, y) => classRank(y.cls) - classRank(x.cls) || y.len - x.len);
 
     // Parcels with wide frontage on a wide road are allowed to stay large.
@@ -869,7 +964,7 @@ function finaliseLots(
     // strip that failed to slice cleanly survives as a single implausible
     // half-block lot.
     if (a > cap && !p.isFlagLot && depth < 3) {
-      for (const piece of resliceOversized(cleaned, cap, cfg)) {
+      for (const piece of resliceOversized(cleaned, cap, cfg, loss)) {
         accept({ ...p, polygon: piece }, depth + 1);
       }
       return;

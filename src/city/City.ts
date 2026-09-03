@@ -17,6 +17,7 @@ import {
   type RoadHeights,
 } from './RoadProfile.js';
 import { assignPlatforms } from './Platform.js';
+import { makeLandLossSink, type LandLoss } from './LandLoss.js';
 
 /** The generated city, before any geometry exists. */
 export interface City {
@@ -37,6 +38,15 @@ export interface City {
   urbanity: UrbanityField;
   spurEdgeIds: Set<number>;
   rejectedBlocks: BlockExtraction['rejected'];
+  /**
+   * Every polygon the block and lot stages threw away, with the reason.
+   *
+   * The counterpart of `VacancyReason` one stage earlier: that says why a lot
+   * carries no building, this says why a piece of land never became a lot.
+   * Recording is a push — `LandLoss.auditLand` is what turns it into numbers,
+   * and it is deliberately not called from here.
+   */
+  landLosses: LandLoss[];
   timings: Record<string, number>;
 }
 
@@ -64,11 +74,13 @@ export function generateCity(params: CityParams): City {
   // stands on.
   const roadHeights = clock('profile', () => solveRoadProfile(roads, terrain, params.roads));
 
+  const landLoss = makeLandLossSink();
   const extraction = clock('blocks', () =>
     extractBlocks(roads, params.seed, {
       ...DEFAULT_BLOCK_OPTIONS,
       laneClearance: params.roads.roadClearance,
       obstacles,
+      losses: landLoss,
     }),
   );
   const urbanity = clock('urbanity', () => makeUrbanityField(roads, params));
@@ -76,7 +88,7 @@ export function generateCity(params: CityParams): City {
   const lots = clock('lots', () => {
     const out: Lot[] = [];
     for (const block of extraction.blocks) {
-      out.push(...subdivideBlock(block, roads, params, out.length, obstacles));
+      out.push(...subdivideBlock(block, roads, params, out.length, obstacles, landLoss));
     }
     return out;
   });
@@ -104,6 +116,7 @@ export function generateCity(params: CityParams): City {
     urbanity,
     spurEdgeIds: extraction.spurEdgeIds,
     rejectedBlocks: extraction.rejected,
+    landLosses: landLoss.losses,
     timings: t,
   };
 }
