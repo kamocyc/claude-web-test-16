@@ -5,6 +5,8 @@ import type { Environment } from './Environment.js';
 import type { MaterialLibrary } from '../material/materials.js';
 import type { Controls } from './Controls.js';
 import type { CityMeshResult } from '../build/CityMesh.js';
+import type { City } from '../city/City.js';
+import { LAND_LOSS_REASONS, auditLand } from '../city/LandLoss.js';
 
 /**
  * The debug UI is not a nicety for a generator like this: most of the work is
@@ -19,6 +21,7 @@ export interface DebugUIOptions {
   materials: MaterialLibrary;
   controls: Controls;
   getStats: () => CityMeshResult['stats'] | null;
+  getCity: () => City | null;
 }
 
 const OVERLAY_LAYERS: [OverlayLayer, string][] = [
@@ -26,6 +29,11 @@ const OVERLAY_LAYERS: [OverlayLayer, string][] = [
   ['water', '河川区域'],
   ['growth', '道路の世代'],
   ['roads', '道路グラフ'],
+  // The pair that answers "is this gap a road or a setback?". Read together.
+  ['roadSurface', '道路の占有面（舗装）'],
+  ['roadRightOfWay', '道路の占有面（道路用地＝敷地の後退線）'],
+  ['landLoss', '未利用地（理由別）'],
+  ['landLossUnaccounted', '未利用地（理由不明・要調査）'],
   ['blocks', '街区'],
   ['lots', '敷地'],
   ['frontage', '接道矢印'],
@@ -80,6 +88,44 @@ export function createDebugUI(opts: DebugUIOptions): GUI {
   for (const [layer, label] of OVERLAY_LAYERS) {
     overlayState[layer] = false;
     fOverlay.add(overlayState, layer).name(label).onChange((v: boolean) => overlay.setEnabled(layer, v));
+  }
+
+  // --- 土地の収支 -----------------------------------------------------------
+  // What happened to every square metre of every block. Behind a button rather
+  // than refreshed with the town: working it out is a polygon boolean per block
+  // per reason, which is not a price to pay on every regeneration for a number
+  // nobody is looking at. The overlay above is the same measurement drawn.
+  const fLand = gui.addFolder('土地の収支').close();
+  const landRows = {
+    敷地: '—',
+    道路用地: '—',
+    未利用地: '—',
+    内訳: '—',
+    理由不明: '—',
+    建物: '—',
+    集計: () => {
+      const city = opts.getCity();
+      if (!city) return;
+      const audit = auditLand(city);
+      const pct = (v: number) => `${((v / Math.max(1, audit.blockArea)) * 100).toFixed(1)}%`;
+      const unused = audit.blockArea - audit.lotArea - audit.rowArea;
+      landRows.敷地 = `${audit.lotArea.toFixed(0)} m² (${pct(audit.lotArea)})`;
+      landRows.道路用地 = `${audit.rowArea.toFixed(0)} m² (${pct(audit.rowArea)})`;
+      landRows.未利用地 = `${unused.toFixed(0)} m² (${pct(unused)})`;
+      landRows.内訳 = LAND_LOSS_REASONS.filter((r) => audit.byReason[r] >= 1)
+        .sort((a, b) => audit.byReason[b] - audit.byReason[a])
+        .slice(0, 3)
+        .map((r) => `${r} ${audit.byReason[r].toFixed(0)}`)
+        .join(' / ');
+      landRows.理由不明 = `${audit.byReason.unaccounted.toFixed(0)} m² / ${audit.unaccounted.length} 箇所`;
+      const stats = opts.getStats();
+      landRows.建物 = stats ? `${stats.buildings} 棟, 空き地 ${stats.vacant}` : '—';
+      gui.controllersRecursive().forEach((c) => c.updateDisplay());
+    },
+  };
+  fLand.add(landRows, '集計').name('集計する（重い）');
+  for (const key of ['敷地', '道路用地', '未利用地', '内訳', '理由不明', '建物'] as const) {
+    fLand.add(landRows, key).disable();
   }
 
   // --- Roads ---------------------------------------------------------------

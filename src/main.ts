@@ -115,6 +115,7 @@ if (import.meta.env.DEV) {
       materials,
       controls,
       getStats: () => mesh?.stats ?? null,
+      getCity: () => city ?? null,
     });
   });
 }

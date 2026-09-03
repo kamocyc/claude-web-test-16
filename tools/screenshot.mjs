@@ -7,11 +7,17 @@
  *   node tools/screenshot.mjs [--url http://127.0.0.1:5173] [--out shots]
  *                             [--seed sakura-3] [--only overview]
  *                             [--zones commercial,industrial] [--kinds konbini,factory]
+ *                             [--overlays roadSurface,roadRightOfWay,landLoss]
  *
  * `--zones` adds two shots per 用途地域 named: one from the air and one standing
  * on the longest street inside it. Fixed camera positions cannot show the
  * zoning, because where the shops and the factories land is different for every
  * seed — and a shopping street only reads as one when you are looking *along* it.
+ *
+ * `--overlays` switches debug layers on before the shots are taken. The land
+ * layers are the ones worth capturing from `--only land`: `roadSurface` with
+ * `roadRightOfWay` shows where a block was set back for a road that is not
+ * there, and `landLoss` shows what was never sold as a lot, by reason.
  */
 import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
@@ -32,6 +38,7 @@ const ONLY = arg('only', null);
 const AGE = arg('age', null);
 const ZONES = arg('zones', null);
 const KINDS = arg('kinds', null);
+const OVERLAYS = arg('overlays', null);
 
 /** [name, cameraPosition, lookAtTarget] */
 const VIEWS = [
@@ -99,6 +106,16 @@ if (LAYOUT) {
   }, LAYOUT);
   await page.waitForFunction(() => window.__cityReady === true, null, { timeout: 300000 });
   console.log(`layout set to ${LAYOUT}`);
+}
+
+// After the town exists, because `rebuild` clears every layer — and because the
+// unused-land layers are only measured when something asks to see them.
+if (OVERLAYS) {
+  await page.evaluate((names) => {
+    for (const n of names) window.__overlay.setEnabled(n, true);
+  }, OVERLAYS.split(','));
+  await page.waitForTimeout(1500);
+  console.log(`overlays on: ${OVERLAYS}`);
 }
 
 // Hide the debug panel so it does not cover the view.

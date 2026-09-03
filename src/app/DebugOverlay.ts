@@ -6,6 +6,8 @@ import type { City } from '../city/City.js';
 import { contourSegments } from '../terrain/heightfield.js';
 import type { LotKind } from '../city/Lots.js';
 import { UNBUILDABLE_VACANCY, UNSOLD_VACANCY, type VacancyReason } from '../building/types.js';
+import { auditLand, type LandLoss, type LandLossReason } from '../city/LandLoss.js';
+import { drawnRoadSurfaces, rightOfWaySurfaces } from '../city/RoadSurface.js';
 
 /**
  * Line overlays for every intermediate stage. The lot and frontage layers are
@@ -30,7 +32,11 @@ export type OverlayLayer =
   | 'useFill'
   | 'contours'
   | 'water'
-  | 'growth';
+  | 'growth'
+  | 'roadSurface'
+  | 'roadRightOfWay'
+  | 'landLoss'
+  | 'landLossUnaccounted';
 
 const COLORS: Record<OverlayLayer, number> = {
   roads: 0x4aa3ff,
@@ -55,6 +61,44 @@ const COLORS: Record<OverlayLayer, number> = {
   water: 0x4aa3ff,
   // Legend colour only; drawn per vertex from the generation.
   growth: 0xffd24a,
+  // The two road layers are meant to be read *together*: the right of way is
+  // always a gutter wider than the asphalt, so a hairline of orange around
+  // every grey ribbon is correct. Anywhere the orange is metres wide, or has no
+  // grey inside it at all, land has been taken off a block for a road that is
+  // not there.
+  roadSurface: 0x3a3f46,
+  roadRightOfWay: 0xff7a1a,
+  // Legend colour only; drawn per ring by reason.
+  landLoss: 0xffd24a,
+  landLossUnaccounted: 0xff2d55,
+};
+
+/**
+ * Unused land by reason.
+ *
+ * A total `Record`, like `KIND_COLORS` and for the same reason. The families
+ * are what matter at a glance from the air: grey is a decision, yellow is the
+ * subdivider giving up on a piece, violet is the ground refusing it, and red is
+ * land nobody recorded anything about — which is a bug, not a category.
+ */
+const LOSS_COLORS: Record<LandLossReason, number> = {
+  // Outside the frontier. Deliberate, and dark, so it does not shout.
+  'block-undeveloped': 0x50565e,
+  'block-too-small': 0xff9f43,
+  'block-degenerate': 0xff2d55,
+  'block-no-frontage': 0xff5fa2,
+  'offcut-too-small': 0xffd24a,
+  'offcut-no-frontage': 0xffb03a,
+  'core-abandoned': 0xffe066,
+  'flag-pole-failed': 0xff9f43,
+  'lot-too-small': 0xc9cf3a,
+  'lot-too-narrow': 0x9aa0a6,
+  'lot-no-frontage': 0xff5fa2,
+  'lot-unbuildable-ground': 0xb07cff,
+  // Benign: the parcel was road, and the road layer already shows it.
+  'lot-on-road': 0x4aa3ff,
+  'lot-degenerate': 0xff2d55,
+  unaccounted: 0xff2d55,
 };
 
 /**
@@ -106,7 +150,16 @@ const HEIGHTS: Record<OverlayLayer, number> = {
   contours: 0.08,
   water: 0.2,
   growth: 0.38,
+  // Below every line layer, and the right of way below the asphalt, so the
+  // orange shows only where it is genuinely wider than the grey.
+  roadRightOfWay: 0.09,
+  roadSurface: 0.11,
+  landLoss: 0.13,
+  landLossUnaccounted: 0.15,
 };
+
+/** Layers built on demand rather than on every regeneration — see `setEnabled`. */
+const LAZY_LAYERS: readonly OverlayLayer[] = ['landLoss', 'landLossUnaccounted'];
 
 /**
  * Ground height under the overlay, set for the duration of a rebuild.
@@ -122,8 +175,15 @@ let groundAt: (x: number, y: number) => number = () => 0;
 
 export class DebugOverlay {
   readonly group = new THREE.Group();
-  private layers = new Map<OverlayLayer, THREE.Object3D>();
+  /**
+   * The objects making up each layer. A list, not a single mesh: the unused-land
+   * layer is a wash plus the outlines over it, and both have to appear and
+   * disappear with one checkbox.
+   */
+  private layers = new Map<OverlayLayer, THREE.Object3D[]>();
   private enabled = new Set<OverlayLayer>();
+  /** Kept so the lazy layers can be built after a regeneration, not during it. */
+  private city: City | null = null;
 
   constructor(parent: THREE.Object3D) {
     this.group.name = 'debug-overlay';
@@ -133,8 +193,13 @@ export class DebugOverlay {
   setEnabled(layer: OverlayLayer, on: boolean): void {
     if (on) this.enabled.add(layer);
     else this.enabled.delete(layer);
-    const mesh = this.layers.get(layer);
-    if (mesh) mesh.visible = on;
+    // Working out where the unused land is costs a polygon boolean per block
+    // per reason, which is not a price to pay on every regeneration for a layer
+    // that is off by default. It is paid the first time somebody asks to see it.
+    if (on && !this.layers.has(layer) && LAZY_LAYERS.includes(layer) && this.city) {
+      this.buildLandLoss(this.city);
+    }
+    for (const object of this.layers.get(layer) ?? []) object.visible = on;
   }
 
   isEnabled(layer: OverlayLayer): boolean {
@@ -144,6 +209,7 @@ export class DebugOverlay {
   /** Rebuild every layer from a freshly generated city. */
   rebuild(city: City, extra: { buildable?: Polygon[]; footprints?: Polygon[] } = {}): void {
     this.clear();
+    this.city = city;
     groundAt = (x, y) => city.terrain.heightAtXY(x, y);
 
     const roadSegs: number[] = [];
@@ -284,6 +350,73 @@ export class DebugOverlay {
       growthCols.push(gc.r, gc.g, gc.b, gc.r, gc.g, gc.b);
     }
     this.addLayer('growth', growthSegs, growthCols);
+
+    // --- the road's own land -------------------------------------------------
+    // Two washes, meant to be read together. The asphalt is what is drawn; the
+    // right of way is what every lot line is held back by, and it is a gutter
+    // wider on each side by design. So a thin orange edging all the way round
+    // the town is correct and reassuring; a wide orange band, or one with no
+    // grey in it at all, is land taken off a block for a road that is not there.
+    // Without this pair there is no way to tell, from the air, whether a gap
+    // between two blocks is a road that is too narrow or a setback that is too
+    // deep — they look identical.
+    // The right of way goes down first and the asphalt over it. These layers do
+    // not depth-test — that is what lets them read over the roofs — so which is
+    // on top is decided by the order they are added, not by their heights. Drawn
+    // the other way round the wider wash simply hides the narrower one, and the
+    // fringe that is the entire point of the pair never appears.
+    const orange = COLORS.roadRightOfWay;
+    this.addFillLayer(
+      'roadRightOfWay',
+      rightOfWaySurfaces(city.roads, city.params.lots.gutterWidth).map((poly) => ({
+        poly,
+        color: orange,
+      })),
+      HEIGHTS.roadRightOfWay,
+    );
+    const grey = COLORS.roadSurface;
+    this.addFillLayer(
+      'roadSurface',
+      drawnRoadSurfaces(city.roads, city.laneHeights.profiles).map((poly) => ({
+        poly,
+        color: grey,
+      })),
+      HEIGHTS.roadSurface,
+    );
+
+    for (const layer of LAZY_LAYERS) {
+      if (this.enabled.has(layer)) {
+        this.buildLandLoss(city);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Land that became neither road nor lot, coloured by why.
+   *
+   * The counterpart of the three vacancy layers, one stage earlier: those say
+   * why a lot carries no building, this says why a piece of land never became a
+   * lot. `unaccounted` gets a layer of its own, crossed out like an empty lot,
+   * because it is the one that means nobody recorded a decision at all — it is
+   * not a category, it is a bug with a location.
+   */
+  private buildLandLoss(city: City): void {
+    const audit = auditLand(city);
+    const recorded = city.landLosses.filter((l) => l.reason !== 'unaccounted');
+    const rings = (list: LandLoss[]) =>
+      list.map((l) => ({ poly: l.polygon, color: LOSS_COLORS[l.reason] }));
+
+    this.addFillLayer('landLoss', rings(recorded), HEIGHTS.landLoss);
+    // Outlined as well as washed, and in the same layer. A wash alone tells you
+    // how much land was lost; the outline is what tells you whether it is one
+    // missing parcel or a dozen slivers, which is a different bug each time.
+    const outlines = ringSegmentsColored(rings(recorded), HEIGHTS.landLoss + 0.01);
+    this.addLayer('landLoss', outlines.positions, outlines.colors);
+    this.addLayer(
+      'landLossUnaccounted',
+      crossedRings(audit.unaccounted.map((l) => l.polygon), HEIGHTS.landLossUnaccounted),
+    );
   }
 
   /**
@@ -330,10 +463,7 @@ export class DebugOverlay {
     });
     const mesh = new THREE.Mesh(geom, mat);
     mesh.renderOrder = 998;
-    mesh.visible = this.enabled.has(layer);
-    mesh.frustumCulled = false;
-    this.group.add(mesh);
-    this.layers.set(layer, mesh);
+    this.attach(layer, mesh);
   }
 
   private addLayer(layer: OverlayLayer, positions: number[], colors?: number[]): void {
@@ -352,18 +482,26 @@ export class DebugOverlay {
     });
     const mesh = new THREE.LineSegments(geom, mat);
     mesh.renderOrder = 999;
+    this.attach(layer, mesh);
+  }
+
+  private attach(layer: OverlayLayer, mesh: THREE.Object3D): void {
     mesh.visible = this.enabled.has(layer);
     mesh.frustumCulled = false;
     this.group.add(mesh);
-    this.layers.set(layer, mesh);
+    const list = this.layers.get(layer);
+    if (list) list.push(mesh);
+    else this.layers.set(layer, [mesh]);
   }
 
   clear(): void {
-    for (const object of this.layers.values()) {
-      this.group.remove(object);
-      const mesh = object as THREE.Mesh;
-      mesh.geometry?.dispose();
-      (mesh.material as THREE.Material | undefined)?.dispose();
+    for (const objects of this.layers.values()) {
+      for (const object of objects) {
+        this.group.remove(object);
+        const mesh = object as THREE.Mesh;
+        mesh.geometry?.dispose();
+        (mesh.material as THREE.Material | undefined)?.dispose();
+      }
     }
     this.layers.clear();
   }
