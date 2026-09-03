@@ -796,23 +796,26 @@ function makeFlagLots(
  */
 function absorbIntoRow(piece: Polygon, strips: { poly: Polygon; front: FrontRef }[]): boolean {
   const c = centroid(piece);
-  let best: { s: { poly: Polygon; front: FrontRef }; d: number } | null = null;
-  for (const s of strips) {
+  const candidates = strips
     // The row has to be in front of the piece, not across the block from it.
-    if (V.dot(V.sub(c, s.front.a), s.front.inward) <= 0) continue;
-    const d = V.dist(c, centroid(s.poly));
-    if (!best || d < best.d) best = { s, d };
-  }
-  if (!best) return false;
+    .filter((s) => V.dot(V.sub(c, s.front.a), s.front.inward) > 0)
+    .map((s) => ({ s, d: V.dist(c, centroid(s.poly)) }))
+    .sort((x, y) => x.d - y.d);
 
-  const want = area(best.s.poly) + area(piece);
-  const merged = largest(unionPoly([best.s.poly, piece]));
-  if (!merged) return false;
-  const cleaned = cleanPolygon(merged, { tolerance: 0.05, minEdge: 0.15, minArea: 1 });
-  if (!cleaned || !isSimple(cleaned)) return false;
-  if (Math.abs(area(cleaned) - want) > 0.5 + want * 0.002) return false;
-  best.s.poly = cleaned;
-  return true;
+  // Every row in turn, nearest first. The nearest by centroid is not always the
+  // one the piece actually shares an edge with — a core behind an L of two rows
+  // has its centroid nearest the one it only touches at a corner.
+  for (const { s } of candidates) {
+    const want = area(s.poly) + area(piece);
+    const merged = unionPoly([s.poly, piece]);
+    if (merged.length !== 1) continue;
+    const cleaned = cleanPolygon(merged[0]!, { tolerance: 0.05, minEdge: 0.15, minArea: 1 });
+    if (!cleaned || !isSimple(cleaned)) continue;
+    if (Math.abs(area(cleaned) - want) > 0.5 + want * 0.002) continue;
+    s.poly = cleaned;
+    return true;
+  }
+  return false;
 }
 
 /** Recursive minimum-area split of the core into flag-lot-sized parcels. */
@@ -1024,8 +1027,40 @@ function finaliseLots(
     // untouched. Without this gate that bend gets a row of houses in it, and the
     // failure is spectacular rather than subtle.
     if (obstacles && !obstacles.buildable(centroid(cleaned))) {
-      lost('lot-unbuildable-ground', cleaned);
-      return;
+      // The river and the 段丘崖 are *areas*. Testing one point against them
+      // decided the fate of the whole parcel on where its centroid happened to
+      // land: a lot with a scarp clipping one corner was thrown away entire,
+      // and a lot with a scarp through the middle was kept entire. Cut the bad
+      // ground out and keep what is on good ground, which is what `Blocks`
+      // already does with the water one stage earlier.
+      //
+      // Whatever survives goes back through this same door: it is re-clipped to
+      // the roads, re-measured, and above all has its frontage recomputed, so a
+      // remnant the scarp has cut off from the street is refused for the honest
+      // reason rather than kept because its parent had frontage.
+      const clipped =
+        depth < 3 ? differencePoly([cleaned], obstacles.noBuildAreas as Polygon[]) : [cleaned];
+      // Strictly smaller — which covers the parcel that is *entirely* on bad
+      // ground, and rules out the case where there was nothing to cut and the
+      // recursion would never end.
+      if (multiArea(clipped) < a - 0.5) {
+        // Booked against the whole parcel, before the survivors are re-offered.
+        // `auditLand` subtracts the lots first and this reason last, so what it
+        // is charged for is exactly the part that did not come back as land —
+        // no extra boolean here to work out which part that was.
+        lost('lot-unbuildable-ground', cleaned);
+        for (const piece of clipped) {
+          if (area(piece) >= cfg.minLotArea) accept({ ...p, polygon: piece }, depth + 1);
+        }
+        return;
+      }
+      // Nothing to cut, so it is the gradient. That has no edge to cut along,
+      // so the question is how much of the parcel is too steep rather than
+      // whether one point of it is.
+      if (obstacles.buildableFraction(cleaned) < cfg.minBuildableFraction) {
+        lost('lot-unbuildable-ground', cleaned);
+        return;
+      }
     }
 
     // The block's street refs plus whatever the parcel itself fronts (a private

@@ -425,6 +425,17 @@ export interface LotParams {
    * lowering this changes nothing.
    */
   minInscribedRadius: number;
+  /**
+   * How much of a parcel has to be shallow enough to build on before it is
+   * kept.
+   *
+   * Steep ground used to be tested at the parcel's centroid and nowhere else,
+   * so a lot straddling a 段丘崖 was refused whole or kept whole on where one
+   * point happened to land — and refusing it meant the land became nothing at
+   * all. The scarp itself is a shape and is now cut out of the parcel instead;
+   * this is for the slope, which is a field with no edge to cut along.
+   */
+  minBuildableFraction: number;
   /** Gutter allowance added to each road's half width. */
   gutterWidth: number;
   maxRecursionDepth: number;
@@ -749,6 +760,7 @@ export const DEFAULT_PARAMS: CityParams = {
     poleWidth: 2.6,
     flagLotChance: 0.55,
     minInscribedRadius: 0.9,
+    minBuildableFraction: 0.35,
     gutterWidth: 0.5,
     maxRecursionDepth: 2,
   },

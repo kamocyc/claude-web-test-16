@@ -13,7 +13,7 @@ import {
 } from '../geom/polygon.js';
 import { clipHalfPlane, insetEdgeHalfPlane } from '../geom/halfplane.js';
 import { differencePoly, intersectPoly, largest, multiArea, unionPoly } from '../geom/boolean.js';
-import { cleanPolygon } from '../geom/simplify.js';
+import { cleanPolygon, removeSpikes } from '../geom/simplify.js';
 import { offsetInward, offsetInwardVariable } from '../geom/offset.js';
 import { bestInscribedRect } from '../geom/inscribedRect.js';
 import { CONCRETE, sampleColor } from '../material/palettes.js';
@@ -163,7 +163,14 @@ function trimSharpCorners(poly: Polygon, minWidth: number): Polygon | null {
     const drop: Polygon = out.filter((_, k) => k !== idx);
     const order = t >= V.len(a) * 0.98 || t >= V.len(b) * 0.98 ? [drop, chamfer] : [chamfer, drop];
 
-    const ring = order.find((r) => r.length >= 3 && isSimple(r));
+    // Both candidates go through `removeSpikes` before they are judged. Dropping
+    // the apex of a fin leaves its two edges lying on top of each other — which
+    // is the whisker `geom/simplify.ts` describes, and is not a simple ring. The
+    // whisker is the fin, so refusing the candidate over it is refusing the very
+    // repair that was asked for, and the needle then stays on the plan.
+    const ring = order
+      .map((r) => removeSpikes(r))
+      .find((r) => r.length >= 3 && isSimple(r));
     if (!ring) {
       skip.add(key(v));
       continue;
@@ -552,6 +559,18 @@ function finishOutline(
     if (settled && usable(settled)) out = settled;
   }
 
+  // One more trim, and this one is the last thing that touches the ring.
+  //
+  // Every trim above is followed by a tidy-up, and the tidy-up is what puts a
+  // corner back: the note at the top of this function records exactly that
+  // happening once already, and the sharpest corner in the town sitting at 7°
+  // while the trim appeared to be running on every plan. Doing it here, after
+  // all the cleaning, means nothing can undo it. It needs no clip against the
+  // envelope for the reason the other two passes do not: the trim only ever
+  // removes area.
+  const finalTrim = trimSharpCorners(out, params.module * MIN_CORNER_WIDTH_MODULES);
+  if (finalTrim && usable(finalTrim)) out = finalTrim;
+
   // Last word: if a needle is still there, do not build.
   //
   // `trimSharpCorners` cuts one corner per pass and gives up on any whose
@@ -564,8 +583,18 @@ function finishOutline(
   return out;
 }
 
-/** Below this a convex corner is a needle rather than a corner. */
-const NEEDLE_FLOOR = 25 * (Math.PI / 180);
+/**
+ * Below this a convex corner is a needle rather than a corner.
+ *
+ * Set to just under `SHARP_CORNER`, which is the angle `trimSharpCorners` cuts
+ * every corner back past — with a little room for the cleaning that follows a
+ * cut. It used to be 25°, which quietly admitted a whole band of plans the trim
+ * had given up on: a 28.8° tail on a skewed 54 m² parcel passed the backstop and
+ * failed `test/shapes.test.ts`, whose bound of 40° says what this constant was
+ * always meant to say. Nothing was wrong with either number on its own; they
+ * simply did not agree, and no plan had landed between them before.
+ */
+const NEEDLE_FLOOR = 40 * (Math.PI / 180);
 
 /**
  * The sharpest *convex* corner of a CCW ring, in radians.

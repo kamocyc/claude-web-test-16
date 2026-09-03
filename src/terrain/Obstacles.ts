@@ -3,6 +3,9 @@ import type { GrowthParams, RoadClass } from '../core/params.js';
 import { DEG } from '../core/params.js';
 import * as V from '../geom/vec2.js';
 import type { Terrain } from './Terrain.js';
+import { bbox, centroid, contains } from '../geom/polygon.js';
+import { unionPoly } from '../geom/boolean.js';
+import { ribbonPolygon } from './River.js';
 
 /**
  * What the land refuses.
@@ -70,6 +73,26 @@ export interface ObstacleField {
   readonly banks: readonly Polygon[];
   /** Scarp faces. Nothing may be built inside. */
   readonly cliffBands: readonly Polygon[];
+  /**
+   * Everything `buildable` refuses that is a *shape* rather than a field: the
+   * water with its margin, and the scarps with theirs.
+   *
+   * Not the same as `cliffBands`. A band is the scarp face, `width / 2` either
+   * side of its centreline; `buildable` refuses a full `width` either side,
+   * which is the face plus the rounding the bilinear sampler puts on its lip.
+   * Subtracting the bands and calling it the same thing would leave a lot half
+   * on ground that every other part of the generator says is unbuildable.
+   */
+  readonly noBuildAreas: readonly Polygon[];
+  /**
+   * The share of a polygon that is shallow enough to build on.
+   *
+   * Slope is a field, not an area — there is no polygon to subtract — so the
+   * only honest thing to do with a parcel that is partly too steep is measure
+   * how much of it is. Sampled on a grid; a parcel too small to catch a sample
+   * is reported by its centroid.
+   */
+  buildableFraction(poly: Polygon, step?: number): number;
   readonly maxGradient: Record<RoadClass, number>;
 }
 
@@ -78,6 +101,12 @@ const PROBE_STEP = 5;
 
 export function makeObstacles(terrain: Terrain, g: GrowthParams): ObstacleField {
   const cliffBands = terrain.terraces.map((t) => t.band);
+  // A full `width` either side, to match what `buildable` refuses below, and
+  // run through a union: a ribbon that wide around a polyline that bends
+  // crosses itself on the inside of every bend, and a self-crossing subtrahend
+  // turns a parcel into offcuts nothing can be built on rather than into a
+  // smaller parcel.
+  const scarpNoBuild = unionPoly(terrain.terraces.map((t) => ribbonPolygon(t.pts, t.width)));
   const banks = terrain.bankPolygons;
 
   const gradient = (a: Vec2, b: Vec2): GradientReport => {
@@ -225,8 +254,25 @@ export function makeObstacles(terrain: Terrain, g: GrowthParams): ObstacleField 
       return terrain.slopeAt(p) <= terrain.params.maxBuildSlope;
     },
 
+    buildableFraction(poly, step = 2) {
+      const box = bbox(poly);
+      let inside = 0;
+      let good = 0;
+      for (let x = box.min.x + step / 2; x < box.max.x; x += step) {
+        for (let y = box.min.y + step / 2; y < box.max.y; y += step) {
+          const q = { x, y };
+          if (!contains(poly, q)) continue;
+          inside++;
+          if (terrain.slopeAt(q) <= terrain.params.maxBuildSlope) good++;
+        }
+      }
+      if (inside === 0) return terrain.slopeAt(centroid(poly)) <= terrain.params.maxBuildSlope ? 1 : 0;
+      return good / inside;
+    },
+
     water: terrain.waterPolygons,
     banks,
     cliffBands,
+    noBuildAreas: [...banks, ...scarpNoBuild],
   };
 }

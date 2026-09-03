@@ -164,13 +164,18 @@ describe('empty lots', () => {
       // Reported rather than merely asserted: the breakdown is what tells you
       // whether a regression is more empty land or a different kind of it.
       const breakdown = JSON.stringify(plan.vacancyReasons);
-      // 5%, raised from 4% when the town started growing rather than being
-      // placed. A grown district is bounded by roads that negotiated with a
-      // hillside, so it is less rectangular than one cut by a straight arterial,
-      // and a few more of its parcels come out as slivers. That is honest — the
-      // gate that matters is `avoidable` below, which is unchanged.
+      // 5.5%, raised from 5%, itself raised from 4% when the town started
+      // growing rather than being placed. Both raises have the same cause and
+      // the same justification. A grown district is bounded by roads that
+      // negotiated with a hillside, so it is less rectangular than one cut by a
+      // straight arterial; and a parcel that meets a 段丘崖 is now cut down to
+      // the part on good ground rather than thrown away whole, which turns land
+      // that used to be nothing at all into seventeen more parcels here — three
+      // of which are slivers. That is honest: they are `too-narrow`, which is
+      // land no house could ever use and is counted as such. The gate that
+      // matters is `avoidable` below, and it has not moved.
       expect(share, `${vacant.length}/${city.lots.length} lots empty ${breakdown}`).toBeLessThan(
-        0.05,
+        0.055,
       );
       expect(
         avoidable.length / city.lots.length,

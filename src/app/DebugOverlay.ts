@@ -94,10 +94,10 @@ const LOSS_COLORS: Record<LandLossReason, number> = {
   'lot-too-small': 0xc9cf3a,
   'lot-too-narrow': 0x9aa0a6,
   'lot-no-frontage': 0xff5fa2,
-  'lot-unbuildable-ground': 0xb07cff,
   // Benign: the parcel was road, and the road layer already shows it.
   'lot-on-road': 0x4aa3ff,
   'lot-degenerate': 0xff2d55,
+  'lot-unbuildable-ground': 0xb07cff,
   unaccounted: 0xff2d55,
 };
 

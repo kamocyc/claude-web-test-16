@@ -54,12 +54,21 @@ export type LandLossReason =
   | 'lot-too-small'
   | 'lot-too-narrow'
   | 'lot-no-frontage'
-  /** River, 段丘崖 or ground too steep to cut a platform into. */
-  | 'lot-unbuildable-ground'
   /** The parcel was almost entirely road — land the subdivider never held. */
   | 'lot-on-road'
   /** Cleanup, the simplicity check or a boolean gave up on the parcel. */
   | 'lot-degenerate'
+  /**
+   * River, 段丘崖 or ground too steep to cut a platform into.
+   *
+   * Last of the lot reasons on purpose. A parcel the ground refuses is cut down
+   * to the part on good ground and the survivors are re-offered, so this is
+   * recorded against the *whole* parcel and charged, by `auditLand`'s
+   * successive subtraction, only for what neither became a lot nor failed for a
+   * more specific reason. Recording just the offcut would need another boolean
+   * per parcel to say which part that was.
+   */
+  | 'lot-unbuildable-ground'
   // --- Nobody's ------------------------------------------------------------
   /** Left over once everything above is taken off the block. Should be zero. */
   | 'unaccounted';
@@ -76,9 +85,9 @@ export const LAND_LOSS_REASONS: readonly LandLossReason[] = [
   'lot-too-small',
   'lot-too-narrow',
   'lot-no-frontage',
-  'lot-unbuildable-ground',
   'lot-on-road',
   'lot-degenerate',
+  'lot-unbuildable-ground',
   'unaccounted',
 ];
 

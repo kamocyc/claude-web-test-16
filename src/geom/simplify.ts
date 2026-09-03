@@ -25,6 +25,43 @@ export function removeShortEdges(poly: Polygon, minLen = 0.05): Polygon {
   return out.length >= 3 ? out : poly;
 }
 
+/**
+ * Cut off whiskers: vertices where the ring turns through 180° and retraces
+ * the edge it just walked.
+ *
+ * These carry no area, so they survive every area-based check, and no crossing
+ * test sees them either — the two segments involved are adjacent and collinear.
+ * They are what a boolean leaves when a corridor is unioned with the shape at
+ * the end of it and the join happens to be exactly as wide as the corridor.
+ *
+ * A ring with one is not a simple polygon, and `intersectPoly` fills it by its
+ * own rule rather than the one the eye uses, so two parcels that share no land
+ * can be reported as overlapping. Trimming is much better than refusing: the
+ * whisker is the only thing wrong, and the land under the ring is real.
+ */
+export function removeSpikes(poly: Polygon, cosLimit = -0.999999): Polygon {
+  if (poly.length < 4) return poly;
+  let pts = poly;
+  // One pass can expose another: trimming the tip of a two-vertex whisker
+  // leaves its base as a fresh one.
+  for (let guard = 0; guard < poly.length && pts.length >= 4; guard++) {
+    let worst = -1;
+    let worstDot = cosLimit;
+    for (let i = 0, n = pts.length; i < n; i++) {
+      const a = V.normalize(V.sub(pts[i]!, pts[(i + n - 1) % n]!));
+      const b = V.normalize(V.sub(pts[(i + 1) % n]!, pts[i]!));
+      const d = V.dot(a, b);
+      if (d < worstDot) {
+        worstDot = d;
+        worst = i;
+      }
+    }
+    if (worst < 0) break;
+    pts = pts.filter((_, i) => i !== worst);
+  }
+  return pts.length >= 3 ? pts : poly;
+}
+
 /** Merge consecutive edges whose turn angle is below `maxAngle` radians. */
 export function mergeCollinear(poly: Polygon, maxAngle = 0.5 * (Math.PI / 180)): Polygon {
   if (poly.length < 4) return poly;
@@ -138,6 +175,9 @@ export function cleanPolygon(poly: Polygon, opts: CleanOptions = {}): Polygon | 
   out = simplifyPolygon(out, tolerance);
   out = mergeCollinear(out, maxTurn);
   out = removeShortEdges(out, minEdge);
+  // Last, because the passes above can create one: collapsing a short edge at
+  // the tip of a thin sliver turns the sliver into a whisker.
+  out = removeSpikes(out);
   if (out.length < 3) return null;
   if (area(out) < minArea) return null;
   return ensureCCW(out);
