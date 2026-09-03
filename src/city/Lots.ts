@@ -119,6 +119,20 @@ interface Parcel {
   fronts: FrontRef[];
 }
 
+/**
+ * A row of lots under construction: the land, the street it fronts, and the
+ * stretch of that street it can actually reach.
+ *
+ * The span is what bounds absorption. Without it a row will take land it cannot
+ * serve, and the slices that fall outside its reach come out landlocked.
+ */
+interface Row {
+  poly: Polygon;
+  front: FrontRef;
+  /** t-range along `front.dir`, or null when the strip touches no street. */
+  span: { t0: number; t1: number } | null;
+}
+
 /** A frontage-bearing edge carried through the block-interior clipping. */
 interface FrontRef {
   a: Vec2;
@@ -148,6 +162,38 @@ interface LossCtx {
 }
 
 const NO_LOSSES: LossCtx = { losses: NO_LAND_LOSSES, blockId: -1 };
+
+/**
+ * How far a row of lots may run past each end of the street it fronts.
+ *
+ * `FrontRef.a` and `.b` are the block edge's endpoints pushed *inward* by the
+ * right of way, so two references meeting at a corner leave a gap between them
+ * proportional to how obtuse the corner is. This covers that gap and nothing
+ * else: it is not a licence to run down the side of a block that has its own
+ * street.
+ */
+const BAND_END_MARGIN = 2;
+
+/**
+ * How near a frontage line a strip has to come to count as touching it.
+ *
+ * A band starts half a metre behind its own frontage line and the cleaning that
+ * follows moves a boundary by centimetres, so this only has to be bigger than
+ * the slop. It is not the 接道義務 test — that is `computeFrontages`.
+ */
+const FRONT_TOUCH = 1.5;
+
+/** How many times leftover land may be offered to a row before we stop asking. */
+const ABSORB_GUARD = 24;
+
+/**
+ * The smallest piece of stranded land worth running a 竿 out to the street for.
+ *
+ * Under this a flag lot is mostly 竿: the 2.6 m corridor comes off the body,
+ * the body fails `too-narrow` at the building stage, and an empty lot has been
+ * traded for a recorded offcut. Anything smaller stays recorded and lost.
+ */
+const SALVAGE_MIN_AREA = 100;
 
 export function subdivideBlock(
   block: Block,
@@ -189,9 +235,18 @@ export function subdivideBlock(
       normal: e.normal,
     });
     if (strip) roadStrips.push(strip);
+    // Extended along the street by the same `inset` the strip overshoots by.
+    //
+    // The two are built from one number and used to disagree: the strip runs
+    // `inset` past each end — that is what closes the corner where two of them
+    // meet — while the reference stopped at the node. `computeFrontages`
+    // measures to the reference as a *segment*, so a lot standing on land the
+    // strip had already taken read as `inset` metres away from its own street
+    // and was refused for want of frontage. A band 2.9 m wide on a local street
+    // and 7 m on an arterial, at every block corner and every dead-end head.
     fronts.push({
-      a: V.addScaled(e.a, e.normal, inset),
-      b: V.addScaled(e.b, e.normal, inset),
+      a: V.addScaled(V.addScaled(e.a, e.normal, inset), e.dir, -inset),
+      b: V.addScaled(V.addScaled(e.b, e.normal, inset), e.dir, inset),
       dir: e.dir,
       inward: e.normal,
       cls: e.cls,
@@ -215,8 +270,8 @@ export function subdivideBlock(
     if (strip) roadStrips.push(strip);
     for (const sign of [1, -1]) {
       fronts.push({
-        a: V.addScaled(r.a, side, sign * half),
-        b: V.addScaled(r.b, side, sign * half),
+        a: V.addScaled(V.addScaled(r.a, side, sign * half), dir, -half),
+        b: V.addScaled(V.addScaled(r.b, side, sign * half), dir, half),
         dir,
         // Inward means away from the street, into the land behind it.
         inward: V.scale(side, sign),
@@ -303,7 +358,7 @@ function subdivideInterior(
 
   // Strips: the part of `inner` within the row depth of each frontage edge, with
   // earlier strips subtracted so corners are not claimed twice.
-  const strips: { poly: Polygon; front: FrontRef }[] = [];
+  const strips: Row[] = [];
   // Kept as a plain list, deliberately *not* unioned: the union of frontage
   // strips around a deep block is an annulus, and this pipeline drops holes, so
   // unioning would silently hand back a solid disc and over-subtract every
@@ -330,11 +385,32 @@ function subdivideInterior(
       origin: V.addScaled(f.a, f.inward, depthOf.get(f)!),
       normal: V.neg(f.inward),
     };
+    // And bounded along the street as well, which it was not.
+    //
+    // Both planes above are perpendicular to `f.inward`, so the band was
+    // infinite in the street's own direction. On a bent or C-shaped block the
+    // widest road is taken first and its slab swept clean across the face,
+    // claiming land twenty metres past the end of its own carriageway — which
+    // `computeFrontages` then measures against the reference as a *segment* and
+    // refuses. The land was sliced perpendicular to a street it is off the end
+    // of, and every slice died landlocked. A quarter of the town's frontageless
+    // land was this.
+    //
+    // Worse than losing it: the band went into `consumed`, so the street round
+    // the corner — whose land it actually is — could not have it either.
+    const t0 = -BAND_END_MARGIN;
+    const t1 = V.dist(f.a, f.b) + BAND_END_MARGIN;
+    const startCap: HalfPlane = { origin: V.addScaled(f.a, f.dir, t0), normal: f.dir };
+    const endCap: HalfPlane = { origin: V.addScaled(f.a, f.dir, t1), normal: V.neg(f.dir) };
     let band: Polygon[] = [];
-    for (const p of clipHalfPlane(inner, front)) band.push(...clipHalfPlane(p, back));
+    for (const p of clipHalfPlane(inner, front)) {
+      for (const q of clipHalfPlane(p, back)) {
+        for (const r of clipHalfPlane(q, startCap)) band.push(...clipHalfPlane(r, endCap));
+      }
+    }
     if (consumed.length > 0) band = differencePoly(band, consumed);
     for (const p of band) {
-      if (area(p) >= cfg.minLotArea * 0.6) strips.push({ poly: p, front: f });
+      if (area(p) >= cfg.minLotArea * 0.6) strips.push({ poly: p, front: f, span: frontageSpan(p, f) });
       else loss.losses.add('offcut-too-small', p, loss.blockId);
       consumed.push(p);
     }
@@ -401,24 +477,75 @@ function subdivideInterior(
   // keeps `ZONE_LOTS.industrial`, which sets the chance to zero because a
   // 工業団地 is a grid of large parcels and not a warren: it now gets deeper
   // parcels rather than gaps.
+  // Land that is in neither a band nor the core.
+  //
+  // The bands are now bounded four ways and the core still only three, so the
+  // two no longer tile `inner` between them — the land past the end of a
+  // street, which is the whole point of the change, falls between them. Taking
+  // the difference explicitly is what keeps this function honest: whatever it
+  // does not hand to a row or a pole, it hands back, and nothing leaves without
+  // a name. One boolean per block interior.
+  const claimed: Polygon[] = [...strips.map((r) => r.poly), ...coreParts];
   const leftovers: Polygon[] = [...strandedCore];
+  for (const rest of differencePoly([inner], claimed)) leftovers.push(rest);
   if (core && !laneBuilt) {
     if (coreArea >= cfg.flagLotMinCore && preferFlags) {
-      const flags = makeFlagLots(core, inner, ordered, cfg, rng, loss);
+      // `carveOuts` is handed in rather than collected afterwards: `placePole`
+      // appends each corridor it places, which is what stops the next pole
+      // crossing it — and what stops any of them crossing the block's 私道.
+      const flags = makeFlagLots(core, inner, ordered, cfg, rng, carveOuts, loss);
       parcels.push(...flags.parcels);
-      for (const f of flags.parcels) if (f.poleCorridor) carveOuts.push(f.poleCorridor);
       leftovers.push(...flags.leftovers);
     } else {
       leftovers.push(core);
     }
   }
 
-  // The street row takes what is left. Done before slicing, so the deepened
+  // The street row takes what it can reach. Done before slicing, so the deepened
   // strip is cut perpendicular to its own street like any other and every lot
-  // that comes out of it still fronts one.
-  for (const piece of leftovers) {
-    if (absorbIntoRow(piece, strips)) continue;
-    if (area(piece) >= cfg.minLotArea) loss.losses.add('core-abandoned', piece, loss.blockId);
+  // that comes out of it still fronts one. What a row cannot reach comes back
+  // and is offered to the next one.
+  const pending = [...leftovers];
+  const unclaimed: Polygon[] = [];
+  let absorbGuard = 0;
+  while (pending.length > 0 && absorbGuard++ < ABSORB_GUARD) {
+    const raw = pending.pop()!;
+    // Cleaned on the way in, wherever it came from.
+    //
+    // Every piece here is the difference of two polygons that were themselves
+    // cut by half-planes, so it arrives with runs of two- and three-metre edges
+    // tracing where one clip crossed another. A fourteen-vertex ring of those
+    // is one no row will merge with and no 竿 can be squared up against, and it
+    // ends up abandoned for reasons of arithmetic rather than of geography.
+    const piece = cleanPolygon(raw, { tolerance: 0.3, minEdge: 1, minArea: cfg.minLotArea });
+    if (!piece) {
+      loss.losses.add('offcut-too-small', raw, loss.blockId);
+      continue;
+    }
+    const { taken, rest } = absorbIntoRow(piece, strips);
+    if (taken) pending.push(...rest);
+    else unclaimed.push(piece);
+  }
+  unclaimed.push(...pending);
+
+  // Last resort: land no row could reach becomes 旗竿地 rather than nothing.
+  //
+  // This is the branch that used not to exist. A row can only take land that
+  // lies behind the stretch of street it actually fronts, so on a deep block
+  // there is always some left over — and it was sliced up with the row anyway
+  // and then refused, one parcel at a time, for want of the frontage nobody had
+  // given it. A 竿 is what that land gets in a real Japanese block.
+  //
+  // Only above `SALVAGE_MIN_AREA`. Below it, running a 2.6 m 竿 out of a scrap
+  // leaves a body too narrow to build on, and a `too-narrow` empty lot is not
+  // an improvement on a recorded offcut.
+  for (const piece of unclaimed) {
+    if (area(piece) < SALVAGE_MIN_AREA) {
+      loss.losses.add('stranded-too-small', piece, loss.blockId);
+      continue;
+    }
+    const forced = forceFlagLots(piece, inner, ordered, cfg, carveOuts, loss);
+    parcels.push(...forced);
   }
 
   // --- Stage C: slice each strip perpendicular to its street ---------------
@@ -702,87 +829,205 @@ function makeFlagLots(
   fronts: FrontRef[],
   cfg: LotParams,
   rng: Rng,
+  claimed: Polygon[],
   loss: LossCtx = NO_LOSSES,
 ): { parcels: Parcel[]; leftovers: Polygon[] } {
   const out: Parcel[] = [];
   const leftovers: Polygon[] = [];
-  const claimedPoles: Polygon[] = [];
 
   for (const piece of splitCoreForFlags(core, cfg, rng, loss)) {
-    const c = centroid(piece);
-    // Every street edge in turn, nearest first, rather than the nearest only.
-    // A pole is a narrow corridor threading between two street lots, and there
-    // are several ways for one to fail — it clips to nothing, it lands on a
-    // pole already claimed, the union with its own flag comes apart. Giving up
-    // on the first of those cost the whole rear parcel, when the street round
-    // the corner would have taken it.
-    const byDistance = fronts
-      .map((f) => ({ f, ...V.closestOnSegment(c, f.a, f.b) }))
-      .map((h) => ({ point: h.point, d: V.dist(c, h.point) }))
-      .sort((x, y) => x.d - y.d);
-
-    let placed = false;
-    for (const near of byDistance) {
-      // A 竿 is a driveway, not a corridor across the block. Past a row's depth
-      // the land is better off widening the row it is behind, which is where it
-      // goes when every front here is refused.
-      if (near.d > cfg.depthMax) break;
-      const dir = V.normalize(V.sub(c, near.point));
-      const side = V.perp(dir);
-      const halfW = cfg.poleWidth / 2;
-      // Start just outside the frontage line, then clip back to it, so the pole
-      // reliably reaches the street and reports frontage of exactly its width.
-      const start = V.addScaled(near.point, dir, -0.5);
-      const corridorRaw: Polygon = [
-        V.addScaled(start, side, -halfW),
-        V.addScaled(c, side, -halfW),
-        V.addScaled(c, side, halfW),
-        V.addScaled(start, side, halfW),
-      ];
-
-      let corridor = largest(intersectPoly([corridorRaw], [inner]));
-      if (!corridor) continue;
-      // Two poles must not overlap each other either. What is left has to still
-      // be a 竿 and not a smear of one: subtracting a claimed pole from a
-      // crossing corridor leaves a 0.4 m ribbon running the whole way alongside
-      // it, which passes an area test comfortably, cannot carry the 2 m of
-      // frontage 接道義務 asks for, and unions with its own flag into a ring
-      // that touches itself. Two of those were reported as overlapping lots.
-      if (claimedPoles.length > 0) {
-        corridor = largest(differencePoly([corridor], claimedPoles));
-        if (!corridor || area(corridor) < cfg.poleWidth * 2) continue;
-        if (maxInscribedCircle(corridor, 0.2).radius < cfg.poleWidth * 0.35) continue;
-      }
-
-      // One ring, or the pole and its flag are not joined. Subtracting a pole
-      // already claimed can cut a corridor in two and leave the half that
-      // reaches the street; `largest` then hands back that half alone, and what
-      // is registered as a 旗竿地 is a bare 31 m × 2.6 m 竿 with no land on the
-      // end of it. One of those was the whole of a finished town's unexplained
-      // vacancy — a lot no house could stand on, which is exactly what a flag
-      // lot with no flag is.
-      const merged = unionPoly([piece, corridor]);
-      if (merged.length !== 1) continue;
-      const cleaned = cleanPolygon(merged[0]!, {
-        tolerance: 0.05,
-        minEdge: 0.15,
-        minArea: cfg.minLotArea,
-      });
-      // A flag and its pole meet along one edge, so their union is one simple
-      // ring. Anything else means they met at a point, or not at all.
-      if (!cleaned || !isSimple(cleaned)) continue;
-      if (area(cleaned) < area(piece) * 0.9) continue;
-
-      claimedPoles.push(corridor);
-      out.push({ polygon: cleaned, isFlagLot: true, poleCorridor: corridor, fronts });
-      placed = true;
-      break;
-    }
+    // A 竿 is a driveway, not a corridor across the block: past a row's depth
+    // the land is better off widening the row it is behind, which is where it
+    // goes when every front refuses. `minSquareness` matches `tryPrivateLane`,
+    // which is the other thing that threads a corridor between two street lots.
+    const parcel = placePole(piece, inner, fronts, cfg, {
+      maxLength: cfg.depthMax,
+      claimed,
+      minSquareness: 0.55,
+    });
     // No street would take a pole from this piece. It is still land, so it goes
     // back to the caller to be absorbed rather than being written off here.
-    if (!placed) leftovers.push(piece);
+    if (!parcel) leftovers.push(piece);
+    else out.push(parcel);
   }
   return { parcels: out, leftovers };
+}
+
+/** What a 竿 is allowed to do on its way out to the street. */
+interface PoleOpts {
+  /** How far it may run. A chosen 旗竿地 keeps this short; a salvaged one cannot. */
+  maxLength: number;
+  /**
+   * Every corridor already spoken for — other poles **and the block's 私道**.
+   *
+   * Mutated: a pole that is placed is appended. The claimed set used to be
+   * local to one `makeFlagLots` call and knew nothing about the lane corridor
+   * beside it, which is how two poles came to overlap.
+   */
+  claimed: Polygon[];
+  /** Minimum |dot(dir, f.inward)|, so a 竿 leaves its street square-on. */
+  minSquareness: number;
+}
+
+/**
+ * Run a 竿 from `body` out to the nearest street that will take one.
+ *
+ * Every street in turn, nearest first, rather than the nearest only: a pole can
+ * fail several ways — it clips to nothing, it lands on a corridor already
+ * claimed, the union with its own flag comes apart — and giving up on the first
+ * of those cost the whole rear parcel when the street round the corner would
+ * have taken it.
+ */
+function placePole(
+  body: Polygon,
+  inner: Polygon,
+  fronts: FrontRef[],
+  cfg: LotParams,
+  opts: PoleOpts,
+): Parcel | null {
+  const c = centroid(body);
+  const byDistance = fronts
+    .map((f) => {
+      const { point } = V.closestOnSegment(c, f.a, f.b);
+      return { f, point, d: V.dist(c, point) };
+    })
+    .sort((x, y) => x.d - y.d);
+
+  for (const near of byDistance) {
+    if (near.d > opts.maxLength) break;
+    const dir = V.normalize(V.sub(c, near.point));
+    // Square-on to the street it leaves. An oblique 竿 shears the street lot it
+    // passes through lengthwise and leaves a wedge behind it.
+    if (V.dot(dir, near.f.inward) < opts.minSquareness) continue;
+    const side = V.perp(dir);
+    const halfW = cfg.poleWidth / 2;
+    // Start just outside the frontage line, then clip back to it, so the pole
+    // reliably reaches the street and reports frontage of exactly its width.
+    const start = V.addScaled(near.point, dir, -0.5);
+    const corridorRaw: Polygon = [
+      V.addScaled(start, side, -halfW),
+      V.addScaled(c, side, -halfW),
+      V.addScaled(c, side, halfW),
+      V.addScaled(start, side, halfW),
+    ];
+
+    let corridor = largest(intersectPoly([corridorRaw], [inner]));
+    if (!corridor) continue;
+    // Two poles must not overlap each other either. What is left has to still
+    // be a 竿 and not a smear of one: subtracting a claimed pole from a
+    // crossing corridor leaves a 0.4 m ribbon running the whole way alongside
+    // it, which passes an area test comfortably, cannot carry the 2 m of
+    // frontage 接道義務 asks for, and unions with its own flag into a ring
+    // that touches itself. Two of those were reported as overlapping lots.
+    if (opts.claimed.length > 0) {
+      corridor = largest(differencePoly([corridor], opts.claimed));
+      if (!corridor || area(corridor) < cfg.poleWidth * 2) continue;
+      if (maxInscribedCircle(corridor, 0.2).radius < cfg.poleWidth * 0.35) continue;
+    }
+
+    // One ring, or the pole and its flag are not joined. Subtracting a pole
+    // already claimed can cut a corridor in two and leave the half that
+    // reaches the street; `largest` then hands back that half alone, and what
+    // is registered as a 旗竿地 is a bare 31 m × 2.6 m 竿 with no land on the
+    // end of it. One of those was the whole of a finished town's unexplained
+    // vacancy — a lot no house could stand on, which is exactly what a flag
+    // lot with no flag is.
+    const merged = unionPoly([body, corridor]);
+    if (merged.length !== 1) continue;
+    const cleaned = cleanPolygon(merged[0]!, {
+      tolerance: 0.05,
+      minEdge: 0.15,
+      minArea: cfg.minLotArea,
+    });
+    // A flag and its pole meet along one edge, so their union is one simple
+    // ring. Anything else means they met at a point, or not at all.
+    if (!cleaned || !isSimple(cleaned)) continue;
+    if (area(cleaned) < area(body) * 0.9) continue;
+
+    opts.claimed.push(corridor);
+    return { polygon: cleaned, isFlagLot: true, poleCorridor: corridor, fronts };
+  }
+  return null;
+}
+
+/**
+ * 旗竿地 for land no street row could reach.
+ *
+ * The bodies are cut **along** the street they will front rather than across
+ * the piece's own longest extent, so that parcels standing side by side each
+ * send their 竿 down their own column and no pole has to tunnel through its
+ * neighbour's plot to get out. It is `resliceOversized`'s lesson — cut across
+ * the frontage, never parallel to it — applied one stage earlier, and it is
+ * what makes forcing a pole safe rather than merely possible.
+ *
+ * Deliberately draws no random numbers. Everything here is geometry, so
+ * salvaging a block cannot shift the stream for the blocks after it.
+ */
+function forceFlagLots(
+  piece: Polygon,
+  inner: Polygon,
+  fronts: FrontRef[],
+  cfg: LotParams,
+  claimed: Polygon[],
+  loss: LossCtx,
+): Parcel[] {
+  const c = centroid(piece);
+  // The nearest street, preferring one the piece is actually in front of but
+  // not insisting on it.
+  //
+  // Insisting was wrong in exactly one place, and it was the place this matters
+  // most: inside a 私道's own recursion there are only two frontage references,
+  // one for each side of the lane, and a piece sitting off the *end* of the
+  // lane is in front of neither. Every one of those was written off — and they
+  // are the land at the head of a cul-de-sac, which is a 旗竿地 if anywhere is.
+  // This only picks which way the bodies are cut; `placePole` still decides,
+  // street by street, whether a 竿 can actually be run.
+  let target: FrontRef | null = null;
+  let best = Infinity;
+  for (const f of fronts) {
+    const { point } = V.closestOnSegment(c, f.a, f.b);
+    // A street the piece is behind is a last resort, so push it down the order
+    // rather than out of it.
+    const d = V.dist(c, point) + (V.dot(V.sub(c, f.a), f.inward) > 0 ? 0 : 1000);
+    if (d < best) {
+      best = d;
+      target = f;
+    }
+  }
+  if (!target) {
+    loss.losses.add('core-abandoned', piece, loss.blockId);
+    return [];
+  }
+
+  const out: Parcel[] = [];
+  const streetward = V.neg(target.inward);
+  for (const body of resliceOversized(piece, cfg.maxLotArea, cfg, loss, streetward)) {
+    if (area(body) < cfg.flagLotMinCore) {
+      loss.losses.add('stranded-too-small', body, loss.blockId);
+      continue;
+    }
+    // Square-on first, obliquely if it must, and no length limit either way:
+    // the alternative here is not a worse 竿, it is losing the land.
+    //
+    // The second pass is what reaches the land past the end of a street. The
+    // nearest point on a frontage line is clamped to its ends, so a body that
+    // overhangs one can only be served by a pole that leaves it at an angle —
+    // and refusing that is refusing the only access the land has.
+    const parcel =
+      placePole(body, inner, fronts, cfg, {
+        maxLength: Infinity,
+        claimed,
+        minSquareness: 0.85,
+      }) ??
+      placePole(body, inner, fronts, cfg, {
+        maxLength: Infinity,
+        claimed,
+        minSquareness: 0.4,
+      });
+    if (parcel) out.push(parcel);
+    else loss.losses.add('core-abandoned', body, loss.blockId);
+  }
+  return out;
 }
 
 /**
@@ -798,28 +1043,104 @@ function makeFlagLots(
  * not actually share a boundary — `largest` would then quietly hand back the
  * strip alone and the core would be lost with the books still balancing.
  */
-function absorbIntoRow(piece: Polygon, strips: { poly: Polygon; front: FrontRef }[]): boolean {
+function absorbIntoRow(piece: Polygon, rows: Row[]): { taken: boolean; rest: Polygon[] } {
   const c = centroid(piece);
-  const candidates = strips
+  const candidates = rows
     // The row has to be in front of the piece, not across the block from it.
-    .filter((s) => V.dot(V.sub(c, s.front.a), s.front.inward) > 0)
-    .map((s) => ({ s, d: V.dist(c, centroid(s.poly)) }))
+    .filter((r) => r.span !== null && V.dot(V.sub(c, r.front.a), r.front.inward) > 0)
+    .map((r) => ({ r, d: V.dist(c, centroid(r.poly)) }))
     .sort((x, y) => x.d - y.d);
 
   // Every row in turn, nearest first. The nearest by centroid is not always the
   // one the piece actually shares an edge with — a core behind an L of two rows
   // has its centroid nearest the one it only touches at a corner.
-  for (const { s } of candidates) {
-    const want = area(s.poly) + area(piece);
-    const merged = unionPoly([s.poly, piece]);
-    if (merged.length !== 1) continue;
-    const cleaned = cleanPolygon(merged[0]!, { tolerance: 0.05, minEdge: 0.15, minArea: 1 });
-    if (!cleaned || !isSimple(cleaned)) continue;
-    if (Math.abs(area(cleaned) - want) > 0.5 + want * 0.002) continue;
-    s.poly = cleaned;
-    return true;
+  for (const { r } of candidates) {
+    const span = r.span!;
+    // Only the part of the piece that lies behind the stretch of street this
+    // row actually fronts.
+    //
+    // The union used to be judged on shape alone: one simple ring of the right
+    // area. An L satisfies that trivially, and `sliceStripIntoLots` then
+    // measures the *whole* L to decide where to cut — so every slice falling in
+    // the arm that overhangs the row's own street came out with no street edge
+    // at all. Three quarters of the town's frontageless land was made here, one
+    // 200–400 m² parcel at a time, by an absorb that kept the land in name
+    // only.
+    //
+    // No tolerance on the span. A lot's width of slack re-admits exactly one
+    // such slice at each end of every absorbing row, which is the thing being
+    // removed.
+    const rest: Polygon[] = [];
+    const inSpan: Polygon[] = [];
+    const startCap: HalfPlane = {
+      origin: V.addScaled(r.front.a, r.front.dir, span.t0),
+      normal: r.front.dir,
+    };
+    const endCap: HalfPlane = {
+      origin: V.addScaled(r.front.a, r.front.dir, span.t1),
+      normal: V.neg(r.front.dir),
+    };
+    for (const p of clipHalfPlane(piece, startCap)) {
+      for (const q of clipHalfPlane(p, endCap)) inSpan.push(q);
+    }
+    for (const q of differencePoly([piece], inSpan)) rest.push(q);
+    if (inSpan.length === 0) continue;
+
+    let poly = r.poly;
+    let took = false;
+    for (const part of inSpan) {
+      const want = area(poly) + area(part);
+      const merged = unionPoly([poly, part]);
+      if (merged.length !== 1) {
+        rest.push(part);
+        continue;
+      }
+      const cleaned = cleanPolygon(merged[0]!, { tolerance: 0.05, minEdge: 0.15, minArea: 1 });
+      if (!cleaned || !isSimple(cleaned)) {
+        rest.push(part);
+        continue;
+      }
+      if (Math.abs(area(cleaned) - want) > 0.5 + want * 0.002) {
+        rest.push(part);
+        continue;
+      }
+      poly = cleaned;
+      took = true;
+    }
+    if (!took) continue;
+    r.poly = poly;
+    // The row's reach is a property of the street, not of how much land has
+    // been piled behind it, so `span` is deliberately not recomputed. That is
+    // also what stops a row taking the same piece twice and this loop running
+    // for ever.
+    return { taken: true, rest: rest.filter((q) => area(q) > 0.5) };
   }
-  return false;
+  return { taken: false, rest: [] };
+}
+
+/**
+ * The stretch of its own street a strip actually abuts.
+ *
+ * Measured on the part of the strip that comes within `FRONT_TOUCH` of the
+ * frontage line, not on the whole polygon — a strip that has already been given
+ * land behind it is longer than the street it fronts, and it is the street that
+ * decides what else it may be given.
+ */
+function frontageSpan(poly: Polygon, front: FrontRef): { t0: number; t1: number } | null {
+  const near: HalfPlane = {
+    origin: V.addScaled(front.a, front.inward, FRONT_TOUCH),
+    normal: V.neg(front.inward),
+  };
+  let t0 = Infinity;
+  let t1 = -Infinity;
+  for (const part of clipHalfPlane(poly, near)) {
+    for (const q of part) {
+      const t = V.dot(V.sub(q, front.a), front.dir);
+      if (t < t0) t0 = t;
+      if (t > t1) t1 = t;
+    }
+  }
+  return t1 > t0 ? { t0, t1 } : null;
 }
 
 /**

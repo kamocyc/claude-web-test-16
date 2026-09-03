@@ -90,6 +90,9 @@ const LOSS_COLORS: Record<LandLossReason, number> = {
   'offcut-too-small': 0xffd24a,
   'offcut-no-frontage': 0xffb03a,
   'core-abandoned': 0xffe066,
+  // A decision, like `block-undeveloped`, so it is drawn as one rather than as
+  // a warning: land with no access that is too small to be worth building any.
+  'stranded-too-small': 0x6f7580,
   'flag-pole-failed': 0xff9f43,
   'lot-too-small': 0xc9cf3a,
   'lot-too-narrow': 0x9aa0a6,

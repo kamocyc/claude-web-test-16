@@ -48,6 +48,16 @@ export type LandLossReason =
   | 'offcut-no-frontage'
   /** The core behind the street rows: no 私道 reached it and no 旗竿地 took it. */
   | 'core-abandoned'
+  /**
+   * Land no row could reach and too small to be worth running a 竿 out to.
+   *
+   * Held apart from `core-abandoned` for the reason `not-yet-developed` is held
+   * apart from `too-narrow`: this one is a decision. A 2.6 m corridor out of a
+   * 40 m² scrap leaves a body no house fits on, so the land is written off on
+   * purpose rather than turned into an empty lot. `core-abandoned` next to it
+   * means the salvage was tried and failed, which is a defect.
+   */
+  | 'stranded-too-small'
   /** A rear parcel no pole could be run out to a street from. */
   | 'flag-pole-failed'
   // --- Became a parcel, refused at the door --------------------------------
@@ -81,6 +91,7 @@ export const LAND_LOSS_REASONS: readonly LandLossReason[] = [
   'offcut-too-small',
   'offcut-no-frontage',
   'core-abandoned',
+  'stranded-too-small',
   'flag-pole-failed',
   'lot-too-small',
   'lot-too-narrow',
@@ -99,7 +110,10 @@ export const LAND_LOSS_REASONS: readonly LandLossReason[] = [
  * covering both tells you nothing. This one does not shrink when the generator
  * gets better — it shrinks when the town gets older.
  */
-export const DELIBERATE_LAND_LOSS: readonly LandLossReason[] = ['block-undeveloped'];
+export const DELIBERATE_LAND_LOSS: readonly LandLossReason[] = [
+  'block-undeveloped',
+  'stranded-too-small',
+];
 
 export interface LandLoss {
   polygon: Polygon;

@@ -76,22 +76,22 @@ const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }
   // the test that would notice if it regressed — this one only says the town
   // stopped changing afterwards.
   'sakura-3/district': {
-    lots: 1748301617,
-    buildings: 1521376829,
+    lots: 73745493,
+    buildings: 1264173010,
     counts:
-      '{"house":296,"konbini":3,"apart":117,"factory":1,"mansion":27,"vacant":7,"zakkyo":10,"shophouse":12}',
+      '{"house":282,"apart":124,"konbini":3,"mansion":31,"factory":2,"vacant":7,"zakkyo":9,"shophouse":14}',
   },
   'sakura-3/grid': {
-    lots: 3177571162,
-    buildings: 28517110,
+    lots: 2955358206,
+    buildings: 1198623255,
     counts:
-      '{"warehouse":5,"factory":11,"vacant":5,"konbini":2,"apart":168,"house":134}',
+      '{"warehouse":4,"factory":11,"vacant":2,"konbini":2,"apart":165,"house":136}',
   },
   'kaede-11/district': {
-    lots: 3411884503,
-    buildings: 875003283,
+    lots: 3713166155,
+    buildings: 3791771543,
     counts:
-      '{"house":248,"apart":125,"mansion":32,"vacant":8,"konbini":2,"zakkyo":15,"shophouse":8}',
+      '{"house":241,"apart":125,"mansion":34,"vacant":6,"konbini":2,"zakkyo":15,"shophouse":13}',
   },
   // And once more for every case, when the street driven through an oversized
   // block stopped having its right of way subtracted twice (`Blocks.splitOversized`).
@@ -123,6 +123,14 @@ const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }
   // died landlocked. Only the district cases move: the grid's parcels are rarely
   // deep enough to be cut the wrong way.
   //
+  // And once when a row of lots stopped running past the end of the street it
+  // fronts. Its band was bounded on the two sides facing the road and on
+  // neither of the two facing along it, so on a bent block the widest road's
+  // row swept clean across the face; and absorption then handed a row land it
+  // could not reach. Both are fixed, and what no row can reach is now forced
+  // into 旗竿地 rather than sliced into 袋地. Every block with a bent or short
+  // front moves, which is most of them. `test/stats.test.ts` has the size of it.
+  //
   // The two grown cases were re-recorded once more, when whether a plot had sold
   // stopped being read off the generation alone and started counting the steps
   // *since* (`unsoldChance`). Only these two move — the three above have growth
@@ -131,16 +139,16 @@ const GOLDEN: Record<string, { lots: number; buildings: number; counts: string }
   // already in the same counts. No lot boundary moved, which is the claim worth
   // making about a change to a sales rule.
   'sakura-3/district/land': {
-    lots: 77856,
-    buildings: 742428322,
+    lots: 3020715332,
+    buildings: 1062871680,
     counts:
-      '{"apart":92,"house":214,"vacant":30,"mansion":23,"shophouse":4,"konbini":4,"zakkyo":8,"factory":5,"warehouse":1}',
+      '{"apart":103,"house":216,"vacant":28,"mansion":21,"shophouse":10,"konbini":4,"zakkyo":7,"factory":5,"warehouse":1}',
   },
   'kaede-11/district/land': {
-    lots: 2913453766,
-    buildings: 3686099619,
+    lots: 2760650154,
+    buildings: 3003365666,
     counts:
-      '{"house":173,"apart":91,"vacant":7,"mansion":21,"konbini":2,"warehouse":6,"factory":4,"zakkyo":13,"shophouse":9}',
+      '{"house":159,"apart":96,"vacant":13,"mansion":24,"konbini":3,"factory":2,"warehouse":7,"shophouse":27,"zakkyo":9}',
   },
 };
 
